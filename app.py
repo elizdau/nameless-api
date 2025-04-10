@@ -40,7 +40,8 @@ class Carve(db.Model):
 def create_tables():
     db.create_all()
 
-create_tables()  # <-- Call it at app startup
+with app.app_context():
+    create_tables()
 
 @app.route("/carves", methods=["POST"])
 def create_carve():
