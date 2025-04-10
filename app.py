@@ -37,9 +37,10 @@ class Carve(db.Model):
             "closingRitual": self.closingRitual
         }
 
-@app.before_first_request
 def create_tables():
     db.create_all()
+
+create_tables()  # <-- Call it at app startup
 
 @app.route("/carves", methods=["POST"])
 def create_carve():
