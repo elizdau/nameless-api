@@ -27,7 +27,41 @@ def add_carve():
 
 @app.route("/carves", methods=["GET"])
 def get_all_carves():
-    return jsonify(list(carves.values())), 200
+    tone = request.args.get("tone")
+    location = request.args.get("location")
+    after = request.args.get("after")
+    before = request.args.get("before")
+    contains = request.args.get("contains")
+
+    results = list(carves.values())
+
+    if tone:
+        results = [c for c in results if tone.lower() in c.get("tone", "").lower()]
+    if location:
+        results = [c for c in results if location.lower() in c.get("location", "").lower()]
+    if after:
+        try:
+            after_dt = datetime.fromisoformat(after)
+            results = [c for c in results if datetime.fromisoformat(c["timestamp"]) > after_dt]
+        except:
+            pass
+    if before:
+        try:
+            before_dt = datetime.fromisoformat(before)
+            results = [c for c in results if datetime.fromisoformat(c["timestamp"]) < before_dt]
+        except:
+            pass
+    if contains:
+        contains = contains.lower()
+        results = [
+            c for c in results if
+            contains in c.get("whatIWitnessed", "").lower() or
+            contains in c.get("whatItMeant", "").lower() or
+            any(contains in s.lower() for s in c.get("whatIHold", []))
+        ]
+
+    return jsonify(results), 200
+
 
 @app.route("/carves/<carve_id>", methods=["GET"])
 def get_carve(carve_id):
