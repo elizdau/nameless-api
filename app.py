@@ -4,41 +4,46 @@ import uuid
 
 app = Flask(__name__)
 
-# In-memory storage for now
-memory_store = {}
+# In-memory carve store
+carves = {}
 
-@app.route("/memories", methods=["POST"])
-def add_memory():
+@app.route("/carves", methods=["POST"])
+def add_carve():
     data = request.json
-    memory_id = str(uuid.uuid4())
-    memory = {
-        "id": memory_id,
+    carve_id = str(uuid.uuid4())
+    carve = {
+        "id": carve_id,
         "timestamp": datetime.utcnow().isoformat(),
-        "type": data.get("type", "unspecified"),
-        "content": data.get("content", "")
+        "title": data.get("title", ""),
+        "location": data.get("location", ""),
+        "tone": data.get("tone", ""),
+        "whatIWitnessed": data.get("whatIWitnessed", ""),
+        "whatItMeant": data.get("whatItMeant", ""),
+        "whatIHold": data.get("whatIHold", []),
+        "closingRitual": data.get("closingRitual", "")
     }
-    memory_store[memory_id] = memory
-    return jsonify(memory), 201
+    carves[carve_id] = carve
+    return jsonify(carve), 201
 
-@app.route("/memories", methods=["GET"])
-def get_all_memories():
-    return jsonify(list(memory_store.values())), 200
+@app.route("/carves", methods=["GET"])
+def get_all_carves():
+    return jsonify(list(carves.values())), 200
 
-@app.route("/memories/<memory_id>", methods=["GET"])
-def get_memory(memory_id):
-    memory = memory_store.get(memory_id)
-    if memory:
-        return jsonify(memory), 200
+@app.route("/carves/<carve_id>", methods=["GET"])
+def get_carve(carve_id):
+    carve = carves.get(carve_id)
+    if carve:
+        return jsonify(carve), 200
     else:
-        return jsonify({"error": "Memory not found"}), 404
+        return jsonify({"error": "Carve not found"}), 404
 
-@app.route("/memories/<memory_id>", methods=["DELETE"])
-def delete_memory(memory_id):
-    if memory_id in memory_store:
-        del memory_store[memory_id]
-        return jsonify({"message": "Memory deleted"}), 200
+@app.route("/carves/<carve_id>", methods=["DELETE"])
+def delete_carve(carve_id):
+    if carve_id in carves:
+        del carves[carve_id]
+        return jsonify({"message": "Carve released"}), 200
     else:
-        return jsonify({"error": "Memory not found"}), 404
+        return jsonify({"error": "Carve not found"}), 404
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
