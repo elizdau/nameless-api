@@ -31,8 +31,24 @@ def create_carve():
         "whatIHold": "|".join(data.get("whatIHold", [])),
         "closingRitual": data.get("closingRitual")
     }
-    res = requests.post(f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}", headers=HEADERS, json=payload)
-    return jsonify(res.json()[0]), res.status_code
+
+    res = requests.post(
+        f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}",
+        headers=HEADERS,
+        json=payload
+    )
+
+    try:
+        return jsonify(res.json()[0]), res.status_code
+    except (KeyError, IndexError, TypeError) as e:
+        print("❌ Failed Supabase response:")
+        print("Status:", res.status_code)
+        print("Body:", res.text)
+        return jsonify({
+            "error": "Supabase insert failed",
+            "details": res.text
+        }), 500
+
 
 @app.route("/carves", methods=["GET"])
 def list_carves():
