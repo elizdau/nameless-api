@@ -122,5 +122,48 @@ def delete_carve(carve_id):
     else:
         return jsonify({"error": "Could not delete"}), 400
 
+@app.route("/echoes", methods=["POST"])
+def create_echo():
+    data = request.json
+    echo = {
+        "id": str(uuid.uuid4()),
+        "timestamp": datetime.utcnow().isoformat(),
+        "phrase": data.get("phrase"),
+        "tags": data.get("tags", []),
+        "source": data.get("source")
+    }
+    res = requests.post(
+        f"{SUPABASE_URL}/rest/v1/Echoes",
+        headers=HEADERS,
+        json=echo
+    )
+    try:
+        return jsonify(res.json()[0]), res.status_code
+    except (KeyError, IndexError, TypeError):
+        print("Echo insert failed:", res.status_code, res.text)
+        return jsonify({"error": "Echo insert failed", "details": res.text}), 500
+
+@app.route("/echoes", methods=["GET"])
+def list_echoes():
+    phrase = request.args.get("phrase")
+    tag = request.args.get("tag")
+
+    filters = []
+    if phrase:
+        filters.append(f"phrase=ilike.*{phrase}*")
+    if tag:
+        filters.append(f"tags=cs.[\"{tag}\"]")  # array contains syntax
+
+    query_string = "&".join(filters)
+    url = f"{SUPABASE_URL}/rest/v1/Echoes?{query_string}"
+
+    try:
+        res = requests.get(url, headers=HEADERS)
+        echoes = res.json()
+        return jsonify(echoes), 200
+    except Exception as e:
+        print("Echo retrieval failed:", str(e))
+        return jsonify({"error": "Echo retrieval failed"}), 500
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
