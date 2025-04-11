@@ -59,6 +59,16 @@ def list_carves():
     res = requests.get(url, headers=HEADERS)
     carves = res.json()
 
+        # 🔍 Add this debug print
+    print("Calling Supabase URL:", url)
+
+    try:
+        res = requests.get(url, headers=HEADERS)
+        carves = res.json()
+    except Exception as e:
+        print("Error calling Supabase:", e)
+        return jsonify({"error": "Failed to call Supabase", "details": str(e)}), 500
+        
     # Manual contains filtering
     if contains:
         contains = contains.lower()
