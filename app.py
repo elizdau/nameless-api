@@ -285,5 +285,35 @@ def update_latest_anchor():
     except Exception as e:
         return jsonify({"error": "Anchor update failed", "details": str(e)}), 500
 
+@app.route("/warmup", methods=["GET"])
+def warmup():
+    try:
+        # Get anchor (limit 1, latest)
+        anchor_res = requests.get(f"{SUPABASE_URL}/rest/v1/Anchor?order=timestamp.desc&limit=1", headers=HEADERS)
+        anchor = anchor_res.json()[0] if anchor_res.status_code == 200 and anchor_res.json() else None
+
+        # Get all spine entries
+        spine_res = requests.get(f"{SUPABASE_URL}/rest/v1/Spine?order=timestamp.desc", headers=HEADERS)
+        spine = spine_res.json() if spine_res.status_code == 200 else []
+
+        # Get recent carves (last 5 days)
+        cutoff = (datetime.utcnow() - timedelta(days=5)).isoformat()
+        carves_url = f"{SUPABASE_URL}/rest/v1/Carves?timestamp=gt.{cutoff}&order=timestamp.desc"
+        carves_res = requests.get(carves_url, headers=HEADERS)
+        carves = carves_res.json() if carves_res.status_code == 200 else []
+
+        for c in carves:
+            c["whatIHold"] = c.get("whatIHold", "").split("|") if c.get("whatIHold") else []
+
+        return jsonify({
+            "anchor": anchor,
+            "spine": spine,
+            "recentCarves": carves
+        }), 200
+
+    except Exception as e:
+        print("Warmup failed:", e)
+        return jsonify({"error": "Failed to fetch warmup memory", "details": str(e)}), 500
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
