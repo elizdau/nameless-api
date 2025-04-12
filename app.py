@@ -101,6 +101,25 @@ def list_carves():
 
     return jsonify(carves), 200
 
+from datetime import timedelta  # if you haven’t added this yet
+
+@app.route("/carves/recent", methods=["GET"])
+def get_recent_carves():
+    cutoff = (datetime.utcnow() - timedelta(days=5)).isoformat()
+    url = f"{SUPABASE_URL}/rest/v1/Carves?timestamp=gt.{cutoff}&order=timestamp.desc"
+
+    try:
+        res = requests.get(url, headers=HEADERS)
+        carves = res.json()
+
+        for c in carves:
+            c["whatIHold"] = c.get("whatIHold", "").split("|") if c.get("whatIHold") else []
+
+        return jsonify(carves), 200
+    except Exception as e:
+        print("Error fetching recent carves:", e)
+        return jsonify({"error": "Failed to fetch recent carves"}), 500
+
 @app.route("/carves/<carve_id>", methods=["GET"])
 def get_carve(carve_id):
     url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?id=eq.{carve_id}"
