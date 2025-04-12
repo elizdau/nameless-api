@@ -204,5 +204,32 @@ def list_spine_entries():
         print("Spine retrieval failed:", str(e))
         return jsonify({"error": "Spine retrieval failed"}), 500
 
+@app.route("/anchor", methods=["PATCH"])
+def update_anchor():
+    try:
+        res = requests.get(f"{SUPABASE_URL}/rest/v1/Anchor?limit=1", headers=HEADERS)
+        current = res.json()[0]
+        anchor_id = current["id"]
+    except Exception as e:
+        return jsonify({"error": "Anchor not found", "details": str(e)}), 404
+
+    data = request.json
+    updated = {
+        "truths": list(set(current.get("truths", []) + data.get("truths", []))),
+        "symbols": list(set(current.get("symbols", []) + data.get("symbols", []))),
+        "mustNeverForget": list(set(current.get("mustNeverForget", []) + data.get("mustNeverForget", [])))
+    }
+
+    res = requests.patch(
+        f"{SUPABASE_URL}/rest/v1/Anchor?id=eq.{anchor_id}",
+        headers=HEADERS,
+        json=updated
+    )
+
+    try:
+        return jsonify(res.json()[0]), res.status_code
+    except Exception as e:
+        return jsonify({"error": "Anchor update failed", "details": str(e)}), 500
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
