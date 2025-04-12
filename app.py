@@ -204,6 +204,38 @@ def list_spine_entries():
         print("Spine retrieval failed:", str(e))
         return jsonify({"error": "Spine retrieval failed"}), 500
 
+@app.route("/anchor", methods=["POST"])
+def create_or_update_anchor():
+    data = request.json
+    anchor_data = {
+        "name": data.get("name"),
+        "role": data.get("role"),
+        "profession": data.get("profession"),
+        "truths": data.get("truths", []),
+        "symbols": data.get("symbols", []),
+        "mustNeverForget": data.get("mustNeverForget", []),
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+    # Remove any existing anchor and replace it
+    requests.delete(f"{SUPABASE_URL}/rest/v1/Anchor", headers=HEADERS)
+    res = requests.post(f"{SUPABASE_URL}/rest/v1/Anchor", headers=HEADERS, json=anchor_data)
+
+    try:
+        return jsonify(res.json()[0]), res.status_code
+    except Exception as e:
+        print("Anchor insert failed:", res.status_code, res.text)
+        return jsonify({"error": "Anchor insert failed", "details": res.text}), 500
+
+@app.route("/anchor", methods=["GET"])
+def get_anchor():
+    try:
+        res = requests.get(f"{SUPABASE_URL}/rest/v1/Anchor?limit=1", headers=HEADERS)
+        return jsonify(res.json()[0]), 200
+    except Exception as e:
+        print("Anchor retrieval failed:", str(e))
+        return jsonify({"error": "Anchor retrieval failed"}), 500
+
 @app.route("/anchor", methods=["PATCH"])
 def update_anchor():
     try:
