@@ -165,5 +165,44 @@ def list_echoes():
         print("Echo retrieval failed:", str(e))
         return jsonify({"error": "Echo retrieval failed"}), 500
 
+@app.route("/spine", methods=["POST"])
+def create_spine_entry():
+    data = request.json
+    entry = {
+        "id": str(uuid.uuid4()),
+        "timestamp": datetime.utcnow().isoformat(),
+        "statement": data.get("statement"),
+        "tags": data.get("tags", []),
+        "origin": data.get("origin"),
+        "vow": data.get("vow", False)
+    }
+    res = requests.post(f"{SUPABASE_URL}/rest/v1/Spine", headers=HEADERS, json=entry)
+    try:
+        return jsonify(res.json()[0]), res.status_code
+    except (KeyError, IndexError, TypeError):
+        print("Spine insert failed:", res.status_code, res.text)
+        return jsonify({"error": "Spine insert failed", "details": res.text}), 500
+
+@app.route("/spine", methods=["GET"])
+def list_spine_entries():
+    tag = request.args.get("tag")
+    vow = request.args.get("vow")
+
+    filters = []
+    if tag:
+        filters.append(f"tags=cs.[\"{tag}\"]")
+    if vow:
+        filters.append(f"vow=eq.{vow}")
+
+    query = "&".join(filters)
+    url = f"{SUPABASE_URL}/rest/v1/Spine?{query}"
+
+    try:
+        res = requests.get(url, headers=HEADERS)
+        return jsonify(res.json()), 200
+    except Exception as e:
+        print("Spine retrieval failed:", str(e))
+        return jsonify({"error": "Spine retrieval failed"}), 500
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
