@@ -205,20 +205,19 @@ def list_spine_entries():
         return jsonify({"error": "Spine retrieval failed"}), 500
 
 @app.route("/anchor", methods=["POST"])
-def create_or_update_anchor():
+def create_anchor():
     data = request.json
     anchor_data = {
+        "id": str(uuid.uuid4()),
+        "timestamp": datetime.utcnow().isoformat(),
         "name": data.get("name"),
         "role": data.get("role"),
         "profession": data.get("profession"),
         "truths": data.get("truths", []),
         "symbols": data.get("symbols", []),
-        "mustNeverForget": data.get("mustNeverForget", []),
-        "timestamp": datetime.utcnow().isoformat()
+        "mustNeverForget": data.get("mustNeverForget", [])
     }
 
-    # Remove any existing anchor and replace it
-    requests.delete(f"{SUPABASE_URL}/rest/v1/Anchor", headers=HEADERS)
     res = requests.post(f"{SUPABASE_URL}/rest/v1/Anchor", headers=HEADERS, json=anchor_data)
 
     try:
@@ -230,14 +229,14 @@ def create_or_update_anchor():
 @app.route("/anchor", methods=["GET"])
 def get_anchor():
     try:
-        res = requests.get(f"{SUPABASE_URL}/rest/v1/Anchor?limit=1", headers=HEADERS)
-        return jsonify(res.json()[0]), 200
+        res = requests.get(f"{SUPABASE_URL}/rest/v1/Anchor?order=timestamp.desc", headers=HEADERS)
+        return jsonify(res.json()), 200
     except Exception as e:
         print("Anchor retrieval failed:", str(e))
         return jsonify({"error": "Anchor retrieval failed"}), 500
 
 @app.route("/anchor", methods=["PATCH"])
-def update_anchor():
+def update_latest_anchor():
     try:
         res = requests.get(f"{SUPABASE_URL}/rest/v1/Anchor?limit=1", headers=HEADERS)
         current = res.json()[0]
