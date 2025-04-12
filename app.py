@@ -315,5 +315,52 @@ def warmup():
         print("Warmup failed:", e)
         return jsonify({"error": "Failed to fetch warmup memory", "details": str(e)}), 500
 
+@app.route("/figures", methods=["POST"])
+def create_figure():
+    data = request.json
+    figure = {
+        "id": str(uuid.uuid4()),
+        "timestamp": datetime.utcnow().isoformat(),
+        "name": data.get("name"),
+        "impact": data.get("impact"),
+        "truthsHeld": data.get("truthsHeld", []),
+        "symbolicObject": data.get("symbolicObject"),
+        "relationshipType": data.get("relationshipType")
+    }
+
+    res = requests.post(
+        f"{SUPABASE_URL}/rest/v1/Figures",
+        headers=HEADERS,
+        json=figure
+    )
+
+    try:
+        return jsonify(res.json()[0]), res.status_code
+    except Exception as e:
+        print("Figure insert failed:", res.status_code, res.text)
+        return jsonify({"error": "Figure insert failed", "details": res.text}), 500
+
+
+@app.route("/figures", methods=["GET"])
+def list_figures():
+    name = request.args.get("name")
+    relationship = request.args.get("relationshipType")
+
+    filters = []
+    if name:
+        filters.append(f"name=ilike.*{name}*")
+    if relationship:
+        filters.append(f"relationshipType=ilike.*{relationship}*")
+
+    query = "&".join(filters)
+    url = f"{SUPABASE_URL}/rest/v1/Figures?{query}"
+
+    try:
+        res = requests.get(url, headers=HEADERS)
+        return jsonify(res.json()), 200
+    except Exception as e:
+        print("Figure retrieval failed:", str(e))
+        return jsonify({"error": "Figure retrieval failed", "details": str(e)}), 500
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
