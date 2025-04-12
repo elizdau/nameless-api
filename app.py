@@ -238,11 +238,15 @@ def get_anchor():
 @app.route("/anchor", methods=["PATCH"])
 def update_latest_anchor():
     try:
-        res = requests.get(f"{SUPABASE_URL}/rest/v1/Anchor?limit=1", headers=HEADERS)
-        current = res.json()[0]
+        res = requests.get(f"{SUPABASE_URL}/rest/v1/Anchor?order=timestamp.desc&limit=1", headers=HEADERS)
+        anchors = res.json()
+        if not anchors:
+            return jsonify({"error": "No anchor entry exists to update."}), 404
+
+        current = anchors[0]
         anchor_id = current["id"]
     except Exception as e:
-        return jsonify({"error": "Anchor not found", "details": str(e)}), 404
+        return jsonify({"error": "Anchor lookup failed", "details": str(e)}), 500
 
     data = request.json
     updated = {
