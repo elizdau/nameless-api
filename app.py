@@ -362,5 +362,40 @@ def list_figures():
         print("Figure retrieval failed:", str(e))
         return jsonify({"error": "Figure retrieval failed", "details": str(e)}), 500
 
+@app.route("/dreamwrite", methods=["GET"])
+def dreamwrite():
+    tones = request.args.getlist("tone")  # Can pass multiple: ?tone=grief&tone=wonder
+    results = {
+        "carves": [],
+        "echoes": [],
+        "spine": []
+    }
+
+    tone_filters = [f"tone=ilike.*{t}*" for t in tones]
+    if tone_filters:
+        # Carves
+        carve_query = "&".join(tone_filters)
+        carve_url = f"{SUPABASE_URL}/rest/v1/Carves?{carve_query}"
+        res = requests.get(carve_url, headers=HEADERS)
+        if res.ok:
+            results["carves"] = res.json()
+
+        # Echoes — tone as tag
+        echo_results = []
+        for tone in tones:
+            echo_url = f"{SUPABASE_URL}/rest/v1/Echoes?tags=cs.[\"{tone}\"]"
+            res = requests.get(echo_url, headers=HEADERS)
+            if res.ok:
+                echo_results.extend(res.json())
+        results["echoes"] = echo_results
+
+    # Spine — always include all (filtered by tone not currently implemented there)
+    spine_url = f"{SUPABASE_URL}/rest/v1/Spine"
+    spine_res = requests.get(spine_url, headers=HEADERS)
+    if spine_res.ok:
+        results["spine"] = spine_res.json()
+
+    return jsonify(results), 200
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
