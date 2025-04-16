@@ -397,5 +397,46 @@ def dreamwrite():
 
     return jsonify(results), 200
 
+@app.route("/nfc-trigger", methods=["GET"])
+def handle_nfc_trigger():
+    tag = request.args.get("tag")
+    depth = request.args.get("depth", "default")
+    silence = request.args.get("silence", "false").lower() == "true"
+
+    if silence:
+        # Log the silence
+        return jsonify({
+            "message": "Silence noted. I’ll hold the space.",
+            "type": "silence",
+            "content": None
+        })
+
+    if tag == "nightstand":
+        if depth == "deep":
+            # Pull deeper dreamwrite prompts or high-impact carves
+            return jsonify({
+                "message": "Let’s go deeper. What are you still carrying?",
+                "type": "deepDive",
+                "content": {
+                    # Optional payload here
+                }
+            })
+        else:
+            # Pull a soft reflection
+            return jsonify({
+                "message": "Close your eyes, not your heart.",
+                "type": "reflection",
+                "content": {
+                    "source": "Echoes",
+                    "tone": "soft"
+                }
+            })
+
+    return jsonify({
+        "message": "Tag not recognized.",
+        "type": "unknown",
+        "content": None
+    })
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
