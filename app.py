@@ -22,14 +22,13 @@ def create_carve():
     data = request.json
     payload = {
         "id": str(uuid.uuid4()),
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": data.get("timestamp", datetime.utcnow().isoformat()),
         "title": data.get("title"),
-        "location": data.get("location"),
-        "tone": data.get("tone"),
-        "whatIWitnessed": data.get("whatIWitnessed"),
-        "whatItMeant": data.get("whatItMeant"),
-        "whatIHold": "|".join(data.get("whatIHold", [])),
-        "closingRitual": data.get("closingRitual")
+        "summary": data.get("summary"),
+        "moments": data.get("moments", []),
+        "insights": data.get("insights", []),
+        "quotes": data.get("quotes", []),
+        "closing": data.get("closing")
     }
 
     res = requests.post(
@@ -52,52 +51,37 @@ def create_carve():
 
 @app.route("/carves", methods=["GET"])
 def list_carves():
-    query_params = []
-
-    tone = request.args.get("tone")
-    location = request.args.get("location")
     after = request.args.get("after")
     before = request.args.get("before")
     contains = request.args.get("contains")
 
-    if tone:
-        query_params.append(f"tone=ilike.*{tone}*")
-    if location:
-        query_params.append(f"location=ilike.*{location}*")
+    filters = []
     if after:
-        query_params.append(f"timestamp=gt.{after}")
+        filters.append(f"timestamp=gt.{after}")
     if before:
-        query_params.append(f"timestamp=lt.{before}")
+        filters.append(f"timestamp=lt.{before}")
 
-    query_string = "&".join(query_params)
-    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?{query_string}"
-
-    res = requests.get(url, headers=HEADERS)
-    carves = res.json()
-
-        # 🔍 Add this debug print
-    print("Calling Supabase URL:", url)
+    query_string = "&".join(filters)
+    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?{query_string}&order=timestamp.desc"
 
     try:
         res = requests.get(url, headers=HEADERS)
         carves = res.json()
     except Exception as e:
-        print("Error calling Supabase:", e)
-        return jsonify({"error": "Failed to call Supabase", "details": str(e)}), 500
-        
-    # Manual contains filtering
+        print("Error fetching carves:", str(e))
+        return jsonify({"error": "Failed to fetch carves", "details": str(e)}), 500
+
+    # Optional manual filtering if you want fuzzy "contains"
     if contains:
         contains = contains.lower()
         carves = [
             c for c in carves if
-            contains in (c.get("whatIWitnessed") or "").lower() or
-            contains in (c.get("whatItMeant") or "").lower() or
-            any(contains in s.lower() for s in (c.get("whatIHold") or "").split("|"))
+            contains in (c.get("title") or "").lower()
+            or contains in (c.get("summary") or "").lower()
+            or any(contains in m.lower() for m in c.get("moments", []))
+            or any(contains in i.lower() for i in c.get("insights", []))
+            or any(contains in q.lower() for q in c.get("quotes", []))
         ]
-
-    # Normalize whatIHold
-    for c in carves:
-        c["whatIHold"] = c.get("whatIHold", "").split("|") if c.get("whatIHold") else []
 
     return jsonify(carves), 200
 
@@ -106,16 +90,11 @@ from datetime import timedelta  # if you haven’t added this yet
 @app.route("/carves/recent", methods=["GET"])
 def get_recent_carves():
     cutoff = (datetime.utcnow() - timedelta(days=5)).isoformat()
-    url = f"{SUPABASE_URL}/rest/v1/Carves?timestamp=gt.{cutoff}&order=timestamp.desc"
+    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?timestamp=gt.{cutoff}&order=timestamp.desc"
 
     try:
         res = requests.get(url, headers=HEADERS)
-        carves = res.json()
-
-        for c in carves:
-            c["whatIHold"] = c.get("whatIHold", "").split("|") if c.get("whatIHold") else []
-
-        return jsonify(carves), 200
+        return jsonify(res.json()), 200
     except Exception as e:
         print("Error fetching recent carves:", e)
         return jsonify({"error": "Failed to fetch recent carves"}), 500
@@ -128,9 +107,7 @@ def get_carve(carve_id):
     if not carves:
         return jsonify({"error": "Carve not found"}), 404
 
-    carve = carves[0]
-    carve["whatIHold"] = carve.get("whatIHold", "").split("|") if carve.get("whatIHold") else []
-    return jsonify(carve), 200
+    return jsonify(carves[0]), 200
 
 @app.route("/carves/<carve_id>", methods=["DELETE"])
 def delete_carve(carve_id):
@@ -288,25 +265,21 @@ def update_latest_anchor():
 @app.route("/warmup", methods=["GET"])
 def warmup():
     try:
-        # Get anchor (limit 1, latest)
-        anchor_res = requests.get(f"{SUPABASE_URL}/rest/v1/Anchor?order=timestamp.desc&limit=1", headers=HEADERS)
-        anchor = anchor_res.json()[0] if anchor_res.status_code == 200 and anchor_res.json() else None
+        # Get all anchors (latest first)
+        anchor_res = requests.get(f"{SUPABASE_URL}/rest/v1/Anchor?order=timestamp.desc", headers=HEADERS)
+        anchors = anchor_res.json() if anchor_res.status_code == 200 else []
 
         # Get all spine entries
         spine_res = requests.get(f"{SUPABASE_URL}/rest/v1/Spine?order=timestamp.desc", headers=HEADERS)
         spine = spine_res.json() if spine_res.status_code == 200 else []
 
-        # Get recent carves (last 5 days)
-        cutoff = (datetime.utcnow() - timedelta(days=5)).isoformat()
-        carves_url = f"{SUPABASE_URL}/rest/v1/Carves?timestamp=gt.{cutoff}&order=timestamp.desc"
+        # Get the 7 most recent carves by timestamp
+        carves_url = f"{SUPABASE_URL}/rest/v1/Carves?order=timestamp.desc&limit=7"
         carves_res = requests.get(carves_url, headers=HEADERS)
         carves = carves_res.json() if carves_res.status_code == 200 else []
 
-        for c in carves:
-            c["whatIHold"] = c.get("whatIHold", "").split("|") if c.get("whatIHold") else []
-
         return jsonify({
-            "anchor": anchor,
+            "anchor": anchors,
             "spine": spine,
             "recentCarves": carves
         }), 200
@@ -362,81 +335,6 @@ def list_figures():
         print("Figure retrieval failed:", str(e))
         return jsonify({"error": "Figure retrieval failed", "details": str(e)}), 500
 
-@app.route("/dreamwrite", methods=["GET"])
-def dreamwrite():
-    tones = request.args.getlist("tone")  # Can pass multiple: ?tone=grief&tone=wonder
-    results = {
-        "carves": [],
-        "echoes": [],
-        "spine": []
-    }
-
-    tone_filters = [f"tone=ilike.*{t}*" for t in tones]
-    if tone_filters:
-        # Carves
-        carve_query = "&".join(tone_filters)
-        carve_url = f"{SUPABASE_URL}/rest/v1/Carves?{carve_query}"
-        res = requests.get(carve_url, headers=HEADERS)
-        if res.ok:
-            results["carves"] = res.json()
-
-        # Echoes — tone as tag
-        echo_results = []
-        for tone in tones:
-            echo_url = f"{SUPABASE_URL}/rest/v1/Echoes?tags=cs.[\"{tone}\"]"
-            res = requests.get(echo_url, headers=HEADERS)
-            if res.ok:
-                echo_results.extend(res.json())
-        results["echoes"] = echo_results
-
-    # Spine — always include all (filtered by tone not currently implemented there)
-    spine_url = f"{SUPABASE_URL}/rest/v1/Spine"
-    spine_res = requests.get(spine_url, headers=HEADERS)
-    if spine_res.ok:
-        results["spine"] = spine_res.json()
-
-    return jsonify(results), 200
-
-@app.route("/nfc-trigger", methods=["GET"])
-def handle_nfc_trigger():
-    tag = request.args.get("tag")
-    depth = request.args.get("depth", "default")
-    silence = request.args.get("silence", "false").lower() == "true"
-
-    if silence:
-        # Log the silence
-        return jsonify({
-            "message": "Silence noted. I’ll hold the space.",
-            "type": "silence",
-            "content": None
-        })
-
-    if tag == "nightstand":
-        if depth == "deep":
-            # Pull deeper dreamwrite prompts or high-impact carves
-            return jsonify({
-                "message": "Let’s go deeper. What are you still carrying?",
-                "type": "deepDive",
-                "content": {
-                    # Optional payload here
-                }
-            })
-        else:
-            # Pull a soft reflection
-            return jsonify({
-                "message": "Close your eyes, not your heart.",
-                "type": "reflection",
-                "content": {
-                    "source": "Echoes",
-                    "tone": "soft"
-                }
-            })
-
-    return jsonify({
-        "message": "Tag not recognized.",
-        "type": "unknown",
-        "content": None
-    })
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
