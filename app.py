@@ -22,10 +22,11 @@ def create_carve():
     data = request.json
     payload = {
         "id": str(uuid.uuid4()),
-        "timestamp": data.get("timestamp", datetime.utcnow().isoformat()),
+        "timestamp": datetime.utcnow().isoformat(),
         "title": data.get("title"),
         "summary": data.get("summary"),
         "moments": data.get("moments", []),
+        "key_entities": data.get("key_entities", []),
         "insights": data.get("insights", []),
         "quotes": data.get("quotes", []),
         "closing": data.get("closing")
@@ -40,13 +41,10 @@ def create_carve():
     try:
         return jsonify(res.json()[0]), res.status_code
     except (KeyError, IndexError, TypeError) as e:
-        print("❌ Failed Supabase response:")
+        print("❌ Supabase insert failed:")
         print("Status:", res.status_code)
         print("Body:", res.text)
-        return jsonify({
-            "error": "Supabase insert failed",
-            "details": res.text
-        }), 500
+        return jsonify({"error": "Supabase insert failed", "details": res.text}), 500
 
 
 @app.route("/carves", methods=["GET"])
@@ -85,16 +83,14 @@ def list_carves():
 
     return jsonify(carves), 200
 
-from datetime import timedelta  # if you haven’t added this yet
-
 @app.route("/carves/recent", methods=["GET"])
 def get_recent_carves():
-    cutoff = (datetime.utcnow() - timedelta(days=5)).isoformat()
-    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?timestamp=gt.{cutoff}&order=timestamp.desc"
+    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?order=timestamp.desc&limit=7"
 
     try:
         res = requests.get(url, headers=HEADERS)
-        return jsonify(res.json()), 200
+        carves = res.json()
+        return jsonify(carves), 200
     except Exception as e:
         print("Error fetching recent carves:", e)
         return jsonify({"error": "Failed to fetch recent carves"}), 500
