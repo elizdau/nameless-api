@@ -26,9 +26,12 @@ auto_carve_status = {"enabled": True}
 @app.route("/carves", methods=["POST"])
 def create_carve():
     data = request.json
+    carve_id = str(uuid.uuid4())
+    timestamp = datetime.utcnow().isoformat()
+
     payload = {
-        "id": str(uuid.uuid4()),
-        "timestamp": datetime.utcnow().isoformat(),
+        "id": carve_id,
+        "timestamp": timestamp,
         "title": data.get("title"),
         "summary": data.get("summary"),
         "moments": data.get("moments", []),
@@ -38,18 +41,44 @@ def create_carve():
         "closing": data.get("closing")
     }
 
+    # Save the carve to Supabase
     res = requests.post(
         f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}",
         headers=HEADERS,
         json=payload
     )
 
-    try:
-        return jsonify(res.json()[0]), res.status_code
-    except (KeyError, IndexError, TypeError) as e:
-        print("❌ Supabase insert failed:")
-        print("Status:", res.status_code)
-        print("Body:", res.text)
+    response_data = {
+        "carve": res.json()[0] if res.ok else None,
+        "echo_suggested": False
+    }
+
+    # 👂 Echo suggestion logic
+    quotes = data.get("quotes", [])
+    for quote in quotes:
+        if quote and len(quote) <= 140:
+            echo = {
+                "id": str(uuid.uuid4()),
+                "timestamp": timestamp,
+                "phrase": quote,
+                "tags": [],  # Could auto-tag later
+                "source": carve_id
+            }
+
+            echo_res = requests.post(
+                f"{SUPABASE_URL}/rest/v1/Echoes",
+                headers=HEADERS,
+                json=echo
+            )
+
+            if echo_res.ok:
+                response_data["echo_suggested"] = True
+                response_data["suggested_echo"] = echo["phrase"]
+            break  # Stop after first qualifying quote
+
+    if res.ok:
+        return jsonify(response_data), 201
+    else:
         return jsonify({"error": "Supabase insert failed", "details": res.text}), 500
 
 
