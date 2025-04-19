@@ -383,6 +383,53 @@ def recall_echoes_by_tag():
     else:
         return jsonify({"error": "Failed to fetch echoes", "details": res.text}), 500
 
+@app.route("/listEchoTags", methods=["GET"])
+def list_echo_tags():
+    url = f"{SUPABASE_URL}/rest/v1/Echoes?select=tags,phrase"
+
+    try:
+        res = requests.get(url, headers=HEADERS)
+        data = res.json()
+
+        tag_index = {}
+
+        for echo in data:
+            for tag in echo.get("tags", []):
+                if tag not in tag_index:
+                    tag_index[tag] = {"count": 0, "examples": []}
+                tag_index[tag]["count"] += 1
+                if len(tag_index[tag]["examples"]) < 3:
+                    tag_index[tag]["examples"].append(echo.get("phrase"))
+
+        tag_summary = [
+            {
+                "tag": tag,
+                "count": tag_index[tag]["count"],
+                "examples": tag_index[tag]["examples"]
+            }
+            for tag in sorted(tag_index, key=lambda t: tag_index[t]["count"], reverse=True)
+        ]
+
+        return jsonify(tag_summary), 200
+
+    except Exception as e:
+        print("Failed to list echo tags:", str(e))
+        return jsonify({"error": "Failed to list echo tags", "details": str(e)}), 500
+
+@app.route("/topEchoTags", methods=["GET"])
+def top_echo_tags():
+    try:
+        limit = int(request.args.get("limit", 5))
+        full_url = request.url_root.rstrip("/") + "/listEchoTags"
+        res = requests.get(full_url)
+        all_tags = res.json()
+
+        top = sorted(all_tags, key=lambda t: t["count"], reverse=True)[:limit]
+        return jsonify(top), 200
+
+    except Exception as e:
+        return jsonify({"error": "Failed to fetch top echo tags", "details": str(e)}), 500
+
 @app.route("/autoCarveStatus", methods=["GET"])
 def get_auto_carve_status():
     url = f"{SUPABASE_URL}/rest/v1/AutoCarveStatus?order=timestamp.desc&limit=1"
