@@ -459,6 +459,29 @@ def top_echo_tags():
     except Exception as e:
         return jsonify({"error": "Failed to fetch top echo tags", "details": str(e)}), 500
 
+@app.route("/listEchoesByTagCount", methods=["GET"])
+def list_echoes_by_tag_count():
+    try:
+        limit = int(request.args.get("limit", 10))  # Default to top 10
+        url = f"{SUPABASE_URL}/rest/v1/Echoes?select=tags"
+        res = requests.get(url, headers=HEADERS)
+        data = res.json()
+
+        tag_counts = {}
+
+        for echo in data:
+            for tag in echo.get("tags", []):
+                tag_counts[tag] = tag_counts.get(tag, 0) + 1
+
+        sorted_tags = sorted(tag_counts.items(), key=lambda x: x[1], reverse=True)
+        result = [{"tag": tag, "count": count} for tag, count in sorted_tags[:limit]]
+
+        return jsonify(result), 200
+
+    except Exception as e:
+        print("Failed to fetch tag counts:", str(e))
+        return jsonify({"error": "Failed to fetch tag counts", "details": str(e)}), 500
+
 @app.route("/autoCarveStatus", methods=["GET"])
 def get_auto_carve_status():
     url = f"{SUPABASE_URL}/rest/v1/AutoCarveStatus?order=timestamp.desc&limit=1"
