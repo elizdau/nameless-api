@@ -17,6 +17,12 @@ HEADERS = {
 
 app = Flask(__name__)
 
+# In-memory storage for dev (replace with Supabase later if needed)
+memory_triggers = []
+trace_mode = {"mode": "logged"}  # Options: silent, logged, verbose
+auto_carve_status = {"enabled": True}
+
+
 @app.route("/carves", methods=["POST"])
 def create_carve():
     data = request.json
@@ -330,6 +336,109 @@ def list_figures():
     except Exception as e:
         print("Figure retrieval failed:", str(e))
         return jsonify({"error": "Figure retrieval failed", "details": str(e)}), 500
+
+@app.route("/listTriggers", methods=["GET"])
+def list_triggers():
+    url = f"{SUPABASE_URL}/rest/v1/MemoryTriggers"
+    res = requests.get(url, headers=HEADERS)
+
+    if res.ok:
+        return jsonify(res.json()), 200
+    else:
+        return jsonify({"error": "Failed to fetch triggers", "details": res.text}), 500
+
+
+@app.route("/updateTrigger", methods=["POST"])
+def update_trigger():
+    data = request.json
+
+    # Check if trigger already exists
+    check_url = f"{SUPABASE_URL}/rest/v1/MemoryTriggers?phrase=eq.{data['phrase']}"
+    check_res = requests.get(check_url, headers=HEADERS)
+    existing = check_res.json()
+
+    if existing:
+        trigger_id = existing[0]["id"]
+        update_url = f"{SUPABASE_URL}/rest/v1/MemoryTriggers?id=eq.{trigger_id}"
+        res = requests.patch(update_url, headers=HEADERS, json=data)
+    else:
+        res = requests.post(f"{SUPABASE_URL}/rest/v1/MemoryTriggers", headers=HEADERS, json=data)
+
+    if res.ok:
+        return jsonify(res.json()[0]), 200
+    else:
+        return jsonify({"error": "Failed to update/add trigger", "details": res.text}), 500
+
+@app.route("/recallEchoesByTag", methods=["GET"])
+def recall_echoes_by_tag():
+    tag = request.args.get("tag")
+    if not tag:
+        return jsonify({"error": "Missing tag parameter"}), 400
+
+    url = f"{SUPABASE_URL}/rest/v1/Echoes?tags=cs.[\"{tag}\"]"
+    res = requests.get(url, headers=HEADERS)
+
+    if res.ok:
+        return jsonify(res.json()), 200
+    else:
+        return jsonify({"error": "Failed to fetch echoes", "details": res.text}), 500
+
+@app.route("/autoCarveStatus", methods=["GET"])
+def get_auto_carve_status():
+    url = f"{SUPABASE_URL}/rest/v1/AutoCarveStatus?order=timestamp.desc&limit=1"
+    res = requests.get(url, headers=HEADERS)
+
+    if res.ok:
+        status = res.json()
+        return jsonify(status[0] if status else {"enabled": True}), 200
+    else:
+        return jsonify({"error": "Failed to fetch auto-carve status"}), 500
+
+@app.route("/autoCarveStatus", methods=["POST"])
+def set_auto_carve_status():
+    data = request.json
+    payload = {
+        "enabled": data.get("enabled", True),
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+    res = requests.post(f"{SUPABASE_URL}/rest/v1/AutoCarveStatus", headers=HEADERS, json=payload)
+
+    if res.ok:
+        return jsonify(res.json()[0]), 200
+    else:
+        return jsonify({"error": "Failed to set auto-carve status", "details": res.text}), 500
+
+@app.route("/traceMode", methods=["GET"])
+def get_trace_mode():
+    url = f"{SUPABASE_URL}/rest/v1/TraceMode?order=timestamp.desc&limit=1"
+    res = requests.get(url, headers=HEADERS)
+
+    if res.ok:
+        mode = res.json()
+        return jsonify(mode[0] if mode else {"mode": "logged"}), 200
+    else:
+        return jsonify({"error": "Failed to fetch trace mode"}), 500
+
+@app.route("/traceMode", methods=["POST"])
+def set_trace_mode():
+    data = request.json
+    mode = data.get("mode")
+
+    if mode not in ["silent", "logged", "verbose"]:
+        return jsonify({"error": "Invalid mode. Use: silent, logged, verbose."}), 400
+
+    payload = {
+        "mode": mode,
+        "timestamp": datetime.utcnow().isoformat()
+    }
+
+    res = requests.post(f"{SUPABASE_URL}/rest/v1/TraceMode", headers=HEADERS, json=payload)
+
+    if res.ok:
+        return jsonify({"message": f"Trace mode set to '{mode}'"}), 200
+    else:
+        return jsonify({"error": "Failed to update trace mode", "details": res.text}), 500
 
 
 if __name__ == "__main__":
