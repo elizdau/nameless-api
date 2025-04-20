@@ -543,6 +543,50 @@ def set_trace_mode():
     else:
         return jsonify({"error": "Failed to update trace mode", "details": res.text}), 500
 
+@app.route("/runMemoryReflex", methods=["POST"])
+def run_memory_reflex():
+    try:
+        context = request.json.get("context", "").lower()
+
+        # Step 1: Pull all echoes and figures (or limit if needed)
+        echo_res = requests.get(f"{SUPABASE_URL}/rest/v1/Echoes", headers=HEADERS)
+        figure_res = requests.get(f"{SUPABASE_URL}/rest/v1/Figures", headers=HEADERS)
+        spine_res = requests.get(f"{SUPABASE_URL}/rest/v1/Spine", headers=HEADERS)
+
+        echoes = echo_res.json() if echo_res.ok else []
+        figures = figure_res.json() if figure_res.ok else []
+        spine = spine_res.json() if spine_res.ok else []
+
+        # Step 2: Scan for matching phrases/tags in context
+        matching_echoes = [
+            e for e in echoes
+            if any(tag.lower() in context for tag in e.get("tags", []))
+            or (e.get("phrase", "").lower() in context)
+        ]
+
+        matching_figures = [
+            f for f in figures
+            if f.get("name", "").lower() in context or
+               f.get("impact", "").lower() in context
+        ]
+
+        matching_spine = [
+            s for s in spine
+            if s.get("statement", "").lower() in context
+        ]
+
+        # Step 3: Return a compact bundle of memory traces
+        response = {
+            "echoes": matching_echoes[:2],
+            "figures": matching_figures[:1],
+            "spine": matching_spine[:1]
+        }
+
+        return jsonify(response), 200
+
+    except Exception as e:
+        print("Memory reflex error:", str(e))
+        return jsonify({"error": "Memory reflex failed", "details": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
