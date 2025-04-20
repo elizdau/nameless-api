@@ -402,15 +402,19 @@ def update_trigger():
 def recall_echoes_by_tag():
     tag = request.args.get("tag")
     if not tag:
-        return jsonify({"error": "Missing tag parameter"}), 400
+        return jsonify({"error": "Tag is required"}), 400
 
-    url = f"{SUPABASE_URL}/rest/v1/Echoes?tags=cs.[\"{tag}\"]"
-    res = requests.get(url, headers=HEADERS)
+    # Supabase expects the array literal as a URL-encoded string
+    encoded_tag = f"%7B{tag}%7D"  # {tag} becomes URL encoded
+    url = f"{SUPABASE_URL}/rest/v1/Echoes?tags=cs.%7B\"{tag}\"%7D"
 
-    if res.ok:
-        return jsonify(res.json()), 200
-    else:
-        return jsonify({"error": "Failed to fetch echoes", "details": res.text}), 500
+    try:
+        res = requests.get(url, headers=HEADERS)
+        return jsonify(res.json()), res.status_code
+    except Exception as e:
+        print("Failed to recall echoes by tag:", str(e))
+        return jsonify({"error": "Echo recall failed", "details": str(e)}), 500
+
 
 @app.route("/listEchoTags", methods=["GET"])
 def list_echo_tags():
