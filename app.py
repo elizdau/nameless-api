@@ -587,6 +587,43 @@ def run_memory_reflex():
     except Exception as e:
         print("Memory reflex error:", str(e))
         return jsonify({"error": "Memory reflex failed", "details": str(e)}), 500
+@app.route("/emberbank", methods=["POST"])
+def create_ember():
+    data = request.json
+    ember = {
+        "id": str(uuid.uuid4()),
+        "timestamp": datetime.utcnow().isoformat(),
+        "question": data.get("question"),
+        "context": data.get("context"),
+        "tags": data.get("tags", []),
+        "resolved": data.get("resolved", False)
+    }
+    res = requests.post(f"{SUPABASE_URL}/rest/v1/Emberbank", headers=HEADERS, json=ember)
+    try:
+        return jsonify(res.json()[0]), res.status_code
+    except Exception as e:
+        return jsonify({"error": "Failed to create ember", "details": str(e)}), 500
+
+
+@app.route("/emberbank", methods=["GET"])
+def list_embers():
+    resolved = request.args.get("resolved")
+    tag = request.args.get("tag")
+    filters = []
+    if resolved:
+        filters.append(f"resolved=eq.{resolved}")
+    if tag:
+        filters.append(f"tags=cs.[\"{tag}\"]")
+
+    query = "&".join(filters)
+    url = f"{SUPABASE_URL}/rest/v1/Emberbank?{query}&order=timestamp.desc"
+
+    try:
+        res = requests.get(url, headers=HEADERS)
+        return jsonify(res.json()), 200
+    except Exception as e:
+        return jsonify({"error": "Failed to fetch emberbank entries", "details": str(e)}), 500
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
