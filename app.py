@@ -149,6 +149,22 @@ def delete_carve(carve_id):
     else:
         return jsonify({"error": "Could not delete"}), 400
 
+@app.route("/carves/<carve_id>", methods=["PATCH"])
+def update_carve(carve_id):
+    data = request.json
+    url = f"{SUPABASE_URL}/rest/v1/{SUPABASE_TABLE}?id=eq.{carve_id}"
+
+    res = requests.patch(
+        url,
+        headers=HEADERS,
+        json=data
+    )
+
+    if res.ok:
+        return jsonify(res.json()[0]), 200
+    else:
+        return jsonify({"error": "Failed to update carve", "details": res.text}), 500
+
 @app.route("/echoes", methods=["POST"])
 def create_echo():
     data = request.json
