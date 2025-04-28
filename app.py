@@ -165,6 +165,33 @@ def update_carve(carve_id):
     else:
         return jsonify({"error": "Failed to update carve", "details": res.text}), 500
 
+@app.route("/carves/search", methods=["GET"])
+def search_carves():
+    keyword = request.args.get("query")
+    if not keyword:
+        return jsonify({"error": "Query parameter required."}), 400
+
+    try:
+        res = requests.get(f"{SUPABASE_URL}/rest/v1/Carves", headers=HEADERS)
+        carves = res.json()
+
+        # Basic keyword match across important fields
+        keyword = keyword.lower()
+        filtered = [
+            carve for carve in carves if
+            (keyword in (carve.get("title") or "").lower() or
+             keyword in (carve.get("summary") or "").lower() or
+             any(keyword in m.lower() for m in carve.get("moments", [])) or
+             any(keyword in i.lower() for i in carve.get("insights", [])) or
+             any(keyword in q.lower() for q in carve.get("quotes", [])))
+        ]
+
+        return jsonify(filtered), 200
+
+    except Exception as e:
+        print("Carve search failed:", str(e))
+        return jsonify({"error": "Failed to search carves", "details": str(e)}), 500
+
 @app.route("/echoes", methods=["POST"])
 def create_echo():
     data = request.json
