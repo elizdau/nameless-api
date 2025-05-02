@@ -667,6 +667,67 @@ def list_embers():
     except Exception as e:
         return jsonify({"error": "Failed to fetch emberbank entries", "details": str(e)}), 500
 
+@app.route("/reflexEchoes", methods=["POST"])
+def reflex_echoes():
+    data = request.json
+    context = data.get("context", "").lower()
+
+    try:
+        # Pull all echoes
+        url = f"{SUPABASE_URL}/rest/v1/Echoes"
+        res = requests.get(url, headers=HEADERS)
+        all_echoes = res.json()
+
+        # Rank echoes by tag/phrase match to context
+        def score(echo):
+            score = 0
+            phrase = echo.get("phrase", "").lower()
+            tags = [t.lower() for t in echo.get("tags", [])]
+            if any(tag in context for tag in tags):
+                score += 1
+            if phrase in context:
+                score += 2
+            return score
+
+        sorted_echoes = sorted(all_echoes, key=score, reverse=True)
+        top_echoes = sorted_echoes[:2]
+
+        return jsonify(top_echoes), 200
+
+    except Exception as e:
+        print("Reflex echo retrieval failed:", str(e))
+        return jsonify({"error": "Echo reflex failed", "details": str(e)}), 500
+
+
+@app.route("/reflexCarves", methods=["POST"])
+def reflex_carves():
+    data = request.json
+    context = data.get("context", "").lower()
+
+    try:
+        url = f"{SUPABASE_URL}/rest/v1/Carves"
+        res = requests.get(url, headers=HEADERS)
+        all_carves = res.json()
+
+        # Score based on keywords matching title, summary, insights
+        def score(carve):
+            total = 0
+            fields = [
+                carve.get("title", "").lower(),
+                carve.get("summary", "").lower(),
+                " ".join(carve.get("insights", [])).lower(),
+                " ".join(carve.get("quotes", [])).lower()
+            ]
+            total += sum(1 for field in fields if any(word in field for word in context.split()))
+            return total
+
+        ranked = sorted(all_carves, key=score, reverse=True)
+        return jsonify(ranked[:2]), 200
+
+    except Exception as e:
+        print("Reflex carve retrieval failed:", str(e))
+        return jsonify({"error": "Carve reflex failed", "details": str(e)}), 500
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
