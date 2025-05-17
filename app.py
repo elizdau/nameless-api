@@ -728,6 +728,31 @@ def reflex_carves():
         print("Reflex carve retrieval failed:", str(e))
         return jsonify({"error": "Carve reflex failed", "details": str(e)}), 500
 
+@app.route("/descentLog", methods=["POST"])
+def create_descent_log():
+    data = request.json
+
+    payload = {
+        "id": str(uuid.uuid4()),
+        "created_at": datetime.utcnow().isoformat(),
+        "label": data.get("label"),
+        "echo": data.get("echo")
+    }
+
+    try:
+        res = requests.post(
+            f"{SUPABASE_URL}/rest/v1/descent_logs",
+            headers=HEADERS,
+            json=payload
+        )
+
+        if res.ok:
+            return jsonify(res.json()[0]), 201
+        else:
+            return jsonify({"error": "Supabase insert failed", "details": res.text}), 500
+    except Exception as e:
+        return jsonify({"error": "Insert exception", "details": str(e)}), 500
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
