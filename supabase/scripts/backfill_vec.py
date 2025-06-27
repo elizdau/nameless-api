@@ -43,30 +43,50 @@ TABLES = ["Carves", "Echoes", "Spine", "Anchor", "Figures"]
 # ─── Backfill routine ─────────────────────────────────────────────────
 def backfill(table: str) -> None:
     print(f"▶  {table}")
+    
     # Fetch rows with embedding null
     params = {
-        'select': 'id,summary_snippet,embedding',
+        'select': 'id,summary_snippet',
         'embedding': 'is.null'
     }
     resp = requests.get(
-        f"{URL}/rest/v1/{table}", params=params, headers=HEADERS
+        f"{URL}/rest/v1/{table}", 
+        params=params, 
+        headers=HEADERS
     )
+    
+    if not resp.ok:
+        print(f"   ✗ Error fetching data: {resp.text}")
+        return
+        
     rows = resp.json()
+    
     if not rows:
         print("   ✓ already complete")
         return
+        
     for row in rows:
-        snippet = row.get('summary_snippet','') or ''
+        snippet = row.get('summary_snippet', '') or ''
+        if not snippet:
+            print(f"   ⚠ Skipping {row['id']} - no summary_snippet")
+            continue
+            
+        # Generate embedding
         vec = embed(snippet)
+        
+        # Update the row
         payload = {"embedding": vec, "last_used": "now()"}
-        patch = requests.patch(
+        patch_resp = requests.patch(
             f"{URL}/rest/v1/{table}?id=eq.{row['id']}",
             headers=HEADERS,
             data=json.dumps(payload)
         )
-        if patch.status_code not in (200,204):
-            print(f"   ✗ failed to update {row['id']}: {patch.text}")
-        time.sleep(0.05)
+        
+        if patch_resp.status_code not in (200, 204):
+            print(f"   ✗ failed to update {row['id']}: {patch_resp.text}")
+        
+        time.sleep(0.05)  # Rate limit
+        
     print(f"   ✓ {len(rows)} rows updated")
 
 # ─── Execute backfill ─────────────────────────────────────────────────
