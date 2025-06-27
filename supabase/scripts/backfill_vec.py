@@ -42,7 +42,7 @@ TABLES = ["Carves", "Echoes", "Spine", "Anchor", "Figures"]
 
 # ─── Backfill routine ─────────────────────────────────────────────────
 def backfill(table: str) -> None:
-    print(f"▶  {table}")
+    print(f"▶  {table}", flush=True)
     
     # Fetch rows with embedding null
     params = {
@@ -56,19 +56,24 @@ def backfill(table: str) -> None:
     )
     
     if not resp.ok:
-        print(f"   ✗ Error fetching data: {resp.text}")
+        print(f"   ✗ Error fetching data: {resp.text}", flush=True)
         return
         
     rows = resp.json()
     
     if not rows:
-        print("   ✓ already complete")
+        print("   ✓ already complete", flush=True)
         return
         
-    for row in rows:
+    print(f"   Found {len(rows)} rows to process", flush=True)
+        
+    for i, row in enumerate(rows):
+        if i % 10 == 0:  # Progress every 10 rows
+            print(f"   Processing row {i+1}/{len(rows)}", flush=True)
+            
         snippet = row.get('summary_snippet', '') or ''
         if not snippet:
-            print(f"   ⚠ Skipping {row['id']} - no summary_snippet")
+            print(f"   ⚠ Skipping {row['id']} - no summary_snippet", flush=True)
             continue
             
         # Generate embedding
@@ -83,11 +88,11 @@ def backfill(table: str) -> None:
         )
         
         if patch_resp.status_code not in (200, 204):
-            print(f"   ✗ failed to update {row['id']}: {patch_resp.text}")
+            print(f"   ✗ failed to update {row['id']}: {patch_resp.text}", flush=True)
         
         time.sleep(0.05)  # Rate limit
         
-    print(f"   ✓ {len(rows)} rows updated")
+    print(f"   ✓ {len(rows)} rows updated", flush=True)
 
 # ─── Execute backfill ─────────────────────────────────────────────────
 def main():
