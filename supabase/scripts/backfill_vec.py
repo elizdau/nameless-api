@@ -16,7 +16,7 @@ from typing import List
 from supabase import create_client, Client
 
 # ── choose embedding backend ────────────────────────────────────────────────
-USE_LOCAL = True            # set False to call OpenAI instead
+USE_LOCAL = False            # set False to call OpenAI instead
 
 if USE_LOCAL:
     from sentence_transformers import SentenceTransformer
