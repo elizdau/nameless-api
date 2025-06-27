@@ -38,7 +38,7 @@ def embed(text: str):
     return response.data[0].embedding
 
 # ─── Tables to backfill ───────────────────────────────────────────────
-TABLES = ["Carves", "Echoes", "Spine", "Anchor", "Figures"]
+TABLES = ["Carves", "Echoes", "Spine", "Anchor"]  # Removed "Figures"
 
 # ─── Backfill routine ─────────────────────────────────────────────────
 def backfill(table: str) -> None:
