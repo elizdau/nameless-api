@@ -1,2 +1,3 @@
 flask
 requests
+supabase-py==2.3.1
