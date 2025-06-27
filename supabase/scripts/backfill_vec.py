@@ -12,6 +12,11 @@ Env vars used (already present for your Render service):
 """
 
 import os, sys, time
+
+# ─────────── Remove any proxy env we inherited ───────────
+for _var in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"):
+    os.environ.pop(_var, None)
+
 from typing import List
 from supabase import create_client, Client
 
