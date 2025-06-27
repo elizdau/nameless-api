@@ -1,68 +1,75 @@
 """
 backfill_vec.py  –  populate missing pgvector embeddings in Supabase.
 
-Run once.  It finds rows where `embedding IS NULL` in every memory table
-(Carves, Echoes, Spine, Anchor, Figures), generates a MiniLM vector from
-`summary_snippet`, and writes it back.
+Run once. It finds rows where `embedding IS NULL` in every memory table
+(Carves, Echoes, Spine, Anchor, Figures), generates an OpenAI vector from
+`summary_snippet`, and writes it back via Supabase REST API.
 
-Env vars used (already present for your Render service):
+Env vars used (already present for your Render worker):
   SUPABASE_URL
   SUPABASE_PRIV_KEY   (service-role key)
-  OPENAI_API_KEY      (if you choose OpenAI backend)
+  OPENAI_API_KEY
 """
 
-import os, sys, time
+import os, sys, time, json, requests
 
-# ─────────── Remove any proxy env we inherited ───────────
-for _var in ("HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy", "NO_PROXY", "no_proxy"):
+# ─── Remove any inherited proxy settings to avoid client proxy bugs ───────
+for _var in ("HTTP_PROXY","http_proxy","HTTPS_PROXY","https_proxy","NO_PROXY","no_proxy"):
     os.environ.pop(_var, None)
 
-from typing import List
-from supabase import create_client, Client
+# ─── Setup Supabase REST headers ───────────────────────────────────────
+URL = os.environ.get("SUPABASE_URL").rstrip('/')
+KEY = os.environ.get("SUPABASE_PRIV_KEY")
+HEADERS = {
+    'apikey': KEY,
+    'Authorization': f'Bearer {KEY}',
+    'Content-Type': 'application/json'
+}
 
-# ── choose embedding backend ────────────────────────────────────────────────
-USE_LOCAL = False            # set False to call OpenAI instead
+# ─── OpenAI embedding function ───────────────────────────────────────
+import openai
+openai.api_key = os.environ.get("OPENAI_API_KEY")
 
-if USE_LOCAL:
-    from sentence_transformers import SentenceTransformer
-    _model = SentenceTransformer("all-MiniLM-L6-v2")
-    def embed(text: str) -> List[float]:
-        return _model.encode(text).tolist()
-else:
-    import openai
-    openai.api_key = os.environ["OPENAI_API_KEY"]
-    def embed(text: str) -> List[float]:
-        return openai.embeddings.create(
-            model="text-embedding-3-small",
-            input=text
-        ).data[0].embedding
-# ───────────────────────────────────────────────────────────────────────────
+def embed(text: str):
+    response = openai.embeddings.create(
+        model="text-embedding-3-small",
+        input=text
+    )
+    return response.data[0].embedding
 
-URL = os.environ["SUPABASE_URL"]
-KEY = os.environ["SUPABASE_PRIV_KEY"]
-sup: Client = create_client(URL, KEY)
-
+# ─── Tables to backfill ───────────────────────────────────────────────
 TABLES = ["Carves", "Echoes", "Spine", "Anchor", "Figures"]
 
+# ─── Backfill routine ─────────────────────────────────────────────────
 def backfill(table: str) -> None:
     print(f"▶  {table}")
-    rows = (sup.table(table)
-              .select("id,summary_snippet")
-              .is_("embedding", "null")
-              .execute()
-              .data)
+    # Fetch rows with embedding null
+    params = {
+        'select': 'id,summary_snippet,embedding',
+        'embedding': 'is.null'
+    }
+    resp = requests.get(
+        f"{URL}/rest/v1/{table}", params=params, headers=HEADERS
+    )
+    rows = resp.json()
     if not rows:
         print("   ✓ already complete")
         return
-    for r in rows:
-        snippet = r["summary_snippet"] or ""
+    for row in rows:
+        snippet = row.get('summary_snippet','') or ''
         vec = embed(snippet)
-        sup.table(table).update(
-            {"embedding": vec, "last_used": "now()"}
-        ).eq("id", r["id"]).execute()
-        time.sleep(0.05)          # polite rate-limit
+        payload = {"embedding": vec, "last_used": "now()"}
+        patch = requests.patch(
+            f"{URL}/rest/v1/{table}?id=eq.{row['id']}",
+            headers=HEADERS,
+            data=json.dumps(payload)
+        )
+        if patch.status_code not in (200,204):
+            print(f"   ✗ failed to update {row['id']}: {patch.text}")
+        time.sleep(0.05)
     print(f"   ✓ {len(rows)} rows updated")
 
+# ─── Execute backfill ─────────────────────────────────────────────────
 def main():
     for tbl in TABLES:
         backfill(tbl)
