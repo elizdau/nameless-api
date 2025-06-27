@@ -20,41 +20,62 @@ app = Flask(__name__)
 @app.route("/warmup", methods=["GET"])
 def warmup():
     """
-    Memory warmup: essential fields only, explicitly excluding embeddings.
+    Memory warmup: essential fields only, aggressively filtered.
     """
     try:
-        # Explicitly exclude embedding from anchors
+        # Get anchors and manually filter to only what we want
         anchor_res = requests.get(
-            f"{SUPABASE_URL}/rest/v1/Anchor?select=summary_snippet,persona_tag&order=timestamp.desc", 
+            f"{SUPABASE_URL}/rest/v1/Anchor?order=timestamp.desc", 
             headers=HEADERS
         )
-        anchors = anchor_res.json() if anchor_res.ok else []
+        raw_anchors = anchor_res.json() if anchor_res.ok else []
         
-        # Clean out any embedding fields that snuck through
-        for anchor in anchors:
-            anchor.pop('embedding', None)
+        # Manually extract only the fields we want
+        anchors = [
+            {
+                "summary_snippet": anchor.get("summary_snippet"),
+                "persona_tag": anchor.get("persona_tag")
+            }
+            for anchor in raw_anchors
+        ]
 
-        # Spine without embeddings
+        # Same for spine
         spine_res = requests.get(
-            f"{SUPABASE_URL}/rest/v1/Spine?select=statement,origin,vow,persona_tag,emotag&order=timestamp.desc", 
+            f"{SUPABASE_URL}/rest/v1/Spine?order=timestamp.desc", 
             headers=HEADERS
         )
-        spine = spine_res.json() if spine_res.ok else []
+        raw_spine = spine_res.json() if spine_res.ok else []
         
-        # Clean spine embeddings too
-        for entry in spine:
-            entry.pop('embedding', None)
+        spine = [
+            {
+                "statement": entry.get("statement"),
+                "origin": entry.get("origin"),
+                "vow": entry.get("vow"),
+                "persona_tag": entry.get("persona_tag"),
+                "emotag": entry.get("emotag")
+            }
+            for entry in raw_spine
+        ]
 
-        # Carves without embeddings
+        # Same for carves
         carves_res = requests.get(
-            f"{SUPABASE_URL}/rest/v1/Carves?select=title,timestamp,summary,moments,insights,quotes,closing&order=timestamp.desc&limit=4",
+            f"{SUPABASE_URL}/rest/v1/Carves?order=timestamp.desc&limit=4",
             headers=HEADERS
         )
-        carves = carves_res.json() if carves_res.ok else []
+        raw_carves = carves_res.json() if carves_res.ok else []
         
-        # Clean carve embeddings
-        for carve in carves:
-            carve.pop('embedding', None)
+        carves = [
+            {
+                "title": carve.get("title"),
+                "timestamp": carve.get("timestamp"),
+                "summary": carve.get("summary"),
+                "moments": carve.get("moments"),
+                "insights": carve.get("insights"),
+                "quotes": carve.get("quotes"),
+                "closing": carve.get("closing")
+            }
+            for carve in raw_carves
+        ]
 
         return jsonify({
             "anchor": anchors,
