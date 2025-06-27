@@ -20,30 +20,41 @@ app = Flask(__name__)
 @app.route("/warmup", methods=["GET"])
 def warmup():
     """
-    Memory warmup: essential fields only to prevent token overload.
-    Returns core identity and recent context for thread initialization.
+    Memory warmup: essential fields only, explicitly excluding embeddings.
     """
     try:
-        # Get anchors with minimal essential fields
+        # Explicitly exclude embedding from anchors
         anchor_res = requests.get(
             f"{SUPABASE_URL}/rest/v1/Anchor?select=summary_snippet,persona_tag&order=timestamp.desc", 
             headers=HEADERS
         )
         anchors = anchor_res.json() if anchor_res.ok else []
+        
+        # Clean out any embedding fields that snuck through
+        for anchor in anchors:
+            anchor.pop('embedding', None)
 
-        # Get spine with essential fields (no timestamp)
+        # Spine without embeddings
         spine_res = requests.get(
             f"{SUPABASE_URL}/rest/v1/Spine?select=statement,origin,vow,persona_tag,emotag&order=timestamp.desc", 
             headers=HEADERS
         )
         spine = spine_res.json() if spine_res.ok else []
+        
+        # Clean spine embeddings too
+        for entry in spine:
+            entry.pop('embedding', None)
 
-        # Get 4 most recent carves with full content but no metadata
+        # Carves without embeddings
         carves_res = requests.get(
             f"{SUPABASE_URL}/rest/v1/Carves?select=title,timestamp,summary,moments,insights,quotes,closing&order=timestamp.desc&limit=4",
             headers=HEADERS
         )
         carves = carves_res.json() if carves_res.ok else []
+        
+        # Clean carve embeddings
+        for carve in carves:
+            carve.pop('embedding', None)
 
         return jsonify({
             "anchor": anchors,
