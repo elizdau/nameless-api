@@ -710,6 +710,31 @@ def get_anchor_by_persona(persona_name):
             "details": str(e)
         }), 500
 
+def build_prompt_with_memory(snippets, user_message):
+    """
+    Build a prompt that includes memory context.
+    """
+    if not snippets:
+        return user_message
+    
+    memory_context = "\n".join([f"- {snippet}" for snippet in snippets])
+    
+    prompt = f"""RELEVANT MEMORIES:
+{memory_context}
+
+USER MESSAGE: {user_message}"""
+    
+    return prompt
+
+def call_nameless_api(prompt):
+    """
+    This is a placeholder - you'll need to implement actual Nameless calling logic.
+    For now, just return the prompt for testing.
+    """
+    # TODO: Implement actual call to Nameless GPT
+    # This could be via OpenAI API, or another service
+    return f"[AUTOPILOT TEST] Received prompt with {len(prompt)} characters. Memories were injected successfully!"
+
 @app.route("/chat", methods=["POST"])
 def chat_with_autopilot():
     data      = request.get_json()
