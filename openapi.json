@@ -56,7 +56,7 @@
                                     },
                                     "message": {
                                         "type": "string",
-                                        "example": "What do you know about Ligasure?"
+                                        "example": "What do you know about Ligasure?",
                                         "x-openai-message-param": true
                                     }
                                 },
