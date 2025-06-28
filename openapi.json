@@ -1,0 +1,59 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "Nameless Memory Autopilot API",
+    "version": "1.0.0",
+    "description": "Expose the /chat endpoint for memory-augmented conversation"
+  },
+  "servers": [
+    {
+      "url": "https://nameless-api.onrender.com",
+      "description": "Production server"
+    }
+  ],
+  "paths": {
+    "/chat": {
+      "post": {
+        "summary": "Send user message and get memory-augmented reply",
+        "operationId": "chat",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "thread_id": {
+                    "type": "string",
+                    "example": "session-123"
+                  },
+                  "message": {
+                    "type": "string",
+                    "example": "What do you know about Ligasure?"
+                  }
+                },
+                "required": ["thread_id", "message"]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Memory-augmented assistant response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "response": { "type": "string" },
+                    "memories_recalled": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
