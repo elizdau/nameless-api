@@ -65,42 +65,69 @@ def warmup():
 @app.route("/carves", methods=["POST"])
 def create_carve():
     """
-    Create a new carve memory with title, summary, moments, insights, quotes, and metadata.
-    Auto-generates summary_snippet and optionally adds an echo for a short quote.
+    Create a new carve memory with full metadata.
     """
     try:
-        data = request.get_json()
+        data = request.get_json(force=True)
 
-        # Required fields
-        title = data.get("title")
-        summary = data.get("summary")
-        moments = data.get("moments", [])
-        insights = data.get("insights", [])
-        quotes = data.get("quotes", [])
+        # Required core fields
+        title           = data.get("title")
+        summary         = data.get("summary")
+        emotag          = data.get("emotag")        # NEW
+        persona_tag     = data.get("persona_tag")   # NEW
+        key_entities    = data.get("key_entities")  # NEW
+        importance      = data.get("importance")    # NEW
 
-        if not all([title, summary]):
-            return jsonify({"error": "title and summary are required"}), 400
+        # If you want theme_tags also required, add it here:
+        # theme_tags     = data.get("theme_tags")
+
+        # Basic presence check
+        missing = []
+        for field_name, val in (
+            ("title", title),
+            ("summary", summary),
+            ("emotag", emotag),
+            ("persona_tag", persona_tag),
+            ("key_entities", key_entities),
+            ("importance", importance),
+            # ("theme_tags", theme_tags),
+        ):
+            if val is None or (isinstance(val, (list,str)) and len(val) == 0):
+                missing.append(field_name)
+
+        if missing:
+            return (
+                jsonify({
+                    "error": "Missing required fields",
+                    "missing": missing
+                }),
+                400
+            )
 
         # Auto-generate summary_snippet
-        summary_snippet = summary[:200] + "..." if len(summary) > 200 else summary
+        summary_snippet = summary[:200] + "…" if len(summary) > 200 else summary
 
-        carve_payload = {
-            "title": title,
-            "summary": summary,
-            "moments": moments,
-            "insights": insights,
-            "quotes": quotes,
+        carve_data = {
+            "title":           title,
+            "summary":         summary,
             "summary_snippet": summary_snippet,
-            "closing": data.get("closing"),
-            "key_entities": data.get("key_entities"),
-            "importance": data.get("importance", 0.5),
-            "emotag": data.get("emotag"),
-            "persona_tag": data.get("persona_tag"),
-            "type": data.get("type", "episodic"),
-            "immutable": data.get("immutable", False),
-            "source_ids": data.get("source_ids"),
+            "moments":         data.get("moments", []),
+            "insights":        data.get("insights", []),
+            "quotes":          data.get("quotes", []),
+            "closing":         data.get("closing"),
+
+            # ** now required **
+            "emotag":       emotag,
+            "persona_tag":  persona_tag,
+            "key_entities": key_entities,
+            "importance":   importance,
+
+            # optional extras
+            "type":             data.get("type", "episodic"),
+            "immutable":        data.get("immutable", False),
+            "source_ids":       data.get("source_ids"),
             "synthesis_metadata": data.get("synthesis_metadata"),
-            "theme_tags": data.get("theme_tags"),
+            "theme_tags":         data.get("theme_tags"),
         }
 
         # Insert carve
