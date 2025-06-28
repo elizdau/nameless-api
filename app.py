@@ -145,6 +145,9 @@ def create_carve():
         carve_response = response.json()
         carve_id = carve_response[0].get("id") if carve_response else None
 
+        # Extract quotes from data before using it
+        quotes = data.get("quotes", [])
+
         # Optional: suggest an echo for the first short quote
         if carve_id and quotes:
             for quote in quotes:
