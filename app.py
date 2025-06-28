@@ -398,11 +398,11 @@ def search_echoes():
                 combined_hits.append(hit)
                 all_hit_ids.add(hit["id"])
         
-        # 4. Get full echo details
+        # 4. Get full echo details (WITHOUT massive embeddings!)
         full_echoes = []
         for hit in combined_hits:
             echo_res = requests.get(
-                f"{SUPABASE_URL}/rest/v1/Echoes?id=eq.{hit['id']}",
+                f"{SUPABASE_URL}/rest/v1/Echoes?id=eq.{hit['id']}&select=id,timestamp,summary_snippet,tags,source,importance,type,emotag,persona_tag,theme_tags",
                 headers=HEADERS
             )
             if echo_res.ok and echo_res.json():
@@ -420,6 +420,12 @@ def search_echoes():
                 "tag_source_matches": len(tag_source_hits)
             }
         }), 200
+        
+    except Exception as e:
+        return jsonify({
+            "error": "Failed to search echoes", 
+            "details": str(e)
+        }), 500
         
     except Exception as e:
         return jsonify({
