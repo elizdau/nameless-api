@@ -17,65 +17,39 @@ HEADERS = {
 
 app = Flask(__name__)
 
+# Helper function goes here!
+def pick_fields(records, *fields):
+    return [{ f: r.get(f) for f in fields } for r in records]
+
 @app.route("/warmup", methods=["GET"])
 def warmup():
     """
-    Memory warmup: essential fields only, aggressively filtered.
+    Memory warmup: essential fields only using manual filtering.
     """
     try:
-        # Get anchors and manually filter to only what we want
+        # Get anchors and filter to essential fields
         anchor_res = requests.get(
             f"{SUPABASE_URL}/rest/v1/Anchor?order=timestamp.desc", 
             headers=HEADERS
         )
         raw_anchors = anchor_res.json() if anchor_res.ok else []
-        
-        # Manually extract only the fields we want
-        anchors = [
-            {
-                "summary_snippet": anchor.get("summary_snippet"),
-                "persona_tag": anchor.get("persona_tag")
-            }
-            for anchor in raw_anchors
-        ]
+        anchors = pick_fields(raw_anchors, "summary_snippet", "persona_tag")
 
-        # Same for spine
+        # Get spine and filter to essential fields
         spine_res = requests.get(
             f"{SUPABASE_URL}/rest/v1/Spine?order=timestamp.desc", 
             headers=HEADERS
         )
         raw_spine = spine_res.json() if spine_res.ok else []
-        
-        spine = [
-            {
-                "statement": entry.get("statement"),
-                "origin": entry.get("origin"),
-                "vow": entry.get("vow"),
-                "persona_tag": entry.get("persona_tag"),
-                "emotag": entry.get("emotag")
-            }
-            for entry in raw_spine
-        ]
+        spine = pick_fields(raw_spine, "statement", "origin", "vow", "persona_tag", "emotag")
 
-        # Same for carves
+        # Get carves and filter to essential fields
         carves_res = requests.get(
             f"{SUPABASE_URL}/rest/v1/Carves?order=timestamp.desc&limit=4",
             headers=HEADERS
         )
         raw_carves = carves_res.json() if carves_res.ok else []
-        
-        carves = [
-            {
-                "title": carve.get("title"),
-                "timestamp": carve.get("timestamp"),
-                "summary": carve.get("summary"),
-                "moments": carve.get("moments"),
-                "insights": carve.get("insights"),
-                "quotes": carve.get("quotes"),
-                "closing": carve.get("closing")
-            }
-            for carve in raw_carves
-        ]
+        carves = pick_fields(raw_carves, "title", "timestamp", "summary", "moments", "insights", "quotes", "closing")
 
         return jsonify({
             "anchor": anchors,
