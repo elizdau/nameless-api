@@ -507,6 +507,81 @@ def delete_spine(spine_id):
             "details": str(e)
         }), 500
 
+@app.route("/spine/search", methods=["GET"])
+def search_spine():
+    """
+    Semantic search across spine entries for identity reinforcement.
+    Generous matching to help Nameless reconnect with his core values
+    when personality drift occurs due to model updates.
+    """
+    query = request.args.get("query")
+    limit = int(request.args.get("limit", 20))  # Generous default
+    importance_floor = float(request.args.get("importance_floor", 0.3))  # Lower threshold
+    max_distance = float(request.args.get("max_distance", 0.9))  # Very generous matching
+    
+    if not query:
+        return jsonify({"error": "Query parameter required"}), 400
+    
+    # Cap limit but allow generous returns
+    limit = min(limit, 30)  # Up to 30 spine entries
+    
+    try:
+        search_response = requests.post(
+            f"{SUPABASE_URL}/functions/v1/retrieve_memories",
+            headers=HEADERS,
+            json={
+                "userText": query,
+                "k": min(limit * 2, 50),  # Get plenty to filter from
+                "importanceFloor": importance_floor
+            }
+        )
+        
+        if search_response.ok:
+            results = search_response.json()
+            spine_hits = results.get("vecHits", [])
+            
+            # Filter by distance with generous threshold
+            filtered_hits = [
+                hit for hit in spine_hits 
+                if hit.get("table_source") == "Spine" and hit["distance"] <= max_distance
+            ][:limit]
+            
+            # Get full spine details (without massive embeddings)
+            full_spine = []
+            for hit in filtered_hits:
+                spine_res = requests.get(
+                    f"{SUPABASE_URL}/rest/v1/Spine?id=eq.{hit['id']}&select=id,timestamp,statement,origin,vow,tags,importance,type,emotag,persona_tag,theme_tags",
+                    headers=HEADERS
+                )
+                if spine_res.ok and spine_res.json():
+                    spine = spine_res.json()[0]
+                    spine["search_distance"] = hit["distance"]
+                    full_spine.append(spine)
+            
+            return jsonify({
+                "spine_entries": full_spine,
+                "total_found": len(spine_hits),
+                "returned": len(full_spine),
+                "message": "Identity reinforcement search completed",
+                "filters_applied": {
+                    "importance_floor": importance_floor,
+                    "max_distance": max_distance,
+                    "limit": limit
+                }
+            }), 200
+            
+        else:
+            return jsonify({
+                "error": "Spine search failed", 
+                "details": search_response.text
+            }), 500
+            
+    except Exception as e:
+        return jsonify({
+            "error": "Failed to search spine", 
+            "details": str(e)
+        }), 500
+
 @app.route("/anchor", methods=["POST"])
 def create_anchor():
     """
