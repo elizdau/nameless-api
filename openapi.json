@@ -79,7 +79,7 @@
             "schema": {
               "type": "object",
               "properties": {
-                "response": {
+                "message": {
                   "type": "string"
                 },
                 "memories_recalled": {
