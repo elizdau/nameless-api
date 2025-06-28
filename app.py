@@ -47,6 +47,9 @@ def plugin_manifest():
 def openapi_spec():
     return send_from_directory(".", "openapi.json", mimetype="application/json")
 
+@app.route("/logo.png")
+def plugin_logo():
+    return send_from_directory(".", "logo.png", mimetype="image/png")
 
 # Helper function goes here!
 def pick_fields(records, *fields):
