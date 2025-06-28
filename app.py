@@ -3,11 +3,15 @@ import os
 import requests
 from datetime import datetime
 import uuid
+import openai
 
+# your Supabase config…
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
 
-# And line 9-13 back to:
+# configure OpenAI
+openai.api_key = os.environ.get("OPENAI_API_KEY")
+
 HEADERS = {
     "apikey": SUPABASE_API_KEY,
     "Authorization": f"Bearer {SUPABASE_API_KEY}",
