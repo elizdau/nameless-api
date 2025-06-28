@@ -6,7 +6,6 @@ import uuid
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY")
-SUPABASE_TABLE = "Carves"
 
 HEADERS = {
     "apikey": SUPABASE_ANON_KEY,
