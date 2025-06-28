@@ -349,13 +349,13 @@ def search_echoes():
     limit = min(limit, 15)
     
     try:
-        # 1. Semantic search via edge function
+        # 1. Semantic search via edge function (search all tables, filter for Echoes)
         search_response = requests.post(
             f"{SUPABASE_URL}/functions/v1/retrieve_memories",
             headers=HEADERS,
             json={
                 "userText": query,
-                "k": min(limit * 2, 30),
+                "k": min(limit * 3, 30),  # Get more results to filter from
                 "importanceFloor": importance_floor
             }
         )
@@ -363,12 +363,14 @@ def search_echoes():
         semantic_hits = []
         if search_response.ok:
             results = search_response.json()
-            semantic_hits = [hit for hit in results.get("vecHits", []) 
+            all_hits = results.get("vecHits", [])
+            # Filter for Echoes with good distance scores
+            semantic_hits = [hit for hit in all_hits 
                            if hit.get("table_source") == "Echoes" and hit["distance"] <= max_distance]
         
         # 2. Tag/Source search via direct Supabase query
         tag_source_res = requests.get(
-            f"{SUPABASE_URL}/rest/v1/Echoes?or=(tags.cs.{{{query}}},source.ilike.*{query}*)&order=timestamp.desc&limit={limit}",
+            f"{SUPABASE_URL}/rest/v1/Echoes?or=(tags.cs.{{{query}}},source.ilike.*{query}*)&order=timestamp.desc&limit={limit}&select=id,timestamp,summary_snippet,tags,source,importance,type,emotag,persona_tag,theme_tags",
             headers=HEADERS
         )
         
@@ -378,7 +380,8 @@ def search_echoes():
                 tag_source_hits.append({
                     "id": echo["id"],
                     "distance": 0.0,  # Perfect match for tag/source
-                    "match_type": "tag_or_source"
+                    "match_type": "tag_or_source",
+                    "echo_data": echo  # Store the full echo data
                 })
         
         # 3. Combine and deduplicate
@@ -398,18 +401,26 @@ def search_echoes():
                 combined_hits.append(hit)
                 all_hit_ids.add(hit["id"])
         
-        # 4. Get full echo details (WITHOUT massive embeddings!)
+        # 4. Get full echo details (only for semantic hits, tag/source already have data)
         full_echoes = []
         for hit in combined_hits:
-            echo_res = requests.get(
-                f"{SUPABASE_URL}/rest/v1/Echoes?id=eq.{hit['id']}&select=id,timestamp,summary_snippet,tags,source,importance,type,emotag,persona_tag,theme_tags",
-                headers=HEADERS
-            )
-            if echo_res.ok and echo_res.json():
-                echo = echo_res.json()[0]
+            if hit.get("echo_data"):
+                # Already have full data from tag/source search
+                echo = hit["echo_data"]
                 echo["search_distance"] = hit["distance"]
                 echo["match_type"] = hit["match_type"]
                 full_echoes.append(echo)
+            else:
+                # Need to fetch data for semantic hits
+                echo_res = requests.get(
+                    f"{SUPABASE_URL}/rest/v1/Echoes?id=eq.{hit['id']}&select=id,timestamp,summary_snippet,tags,source,importance,type,emotag,persona_tag,theme_tags",
+                    headers=HEADERS
+                )
+                if echo_res.ok and echo_res.json():
+                    echo = echo_res.json()[0]
+                    echo["search_distance"] = hit["distance"]
+                    echo["match_type"] = hit["match_type"]
+                    full_echoes.append(echo)
         
         return jsonify({
             "echoes": full_echoes,
@@ -427,12 +438,6 @@ def search_echoes():
             "details": str(e)
         }), 500
         
-    except Exception as e:
-        return jsonify({
-            "error": "Failed to search echoes", 
-            "details": str(e)
-        }), 500
-
 @app.route("/spine", methods=["POST"])
 def create_spine():
     """
