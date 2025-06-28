@@ -134,7 +134,7 @@ def create_carve():
         response = requests.post(
             f"{SUPABASE_URL}/rest/v1/Carves",
             headers=HEADERS,
-            json=carve_payload
+            json=carve_data
         )
         if not response.ok:
             return jsonify({
