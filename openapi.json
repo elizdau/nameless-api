@@ -37,58 +37,62 @@
                 }
             }
         },
-        "/chat": {
-            "post": {
-                "summary": "Send user message and get memory-augmented reply",
-                "operationId": "chat",
-                "x-openai-isConsequential": false,
-                "x-openai-autocall": "ALWAYS",
-                "requestBody": {
-                    "required": true,
-                    "content": {
-                        "application/json": {
-                            "schema": {
-                                "type": "object",
-                                "properties": {
-                                    "thread_id": {
-                                        "type": "string",
-                                        "example": "session-123"
-                                    },
-                                    "message": {
-                                        "type": "string",
-                                        "example": "What do you know about Ligasure?",
-                                        "x-openai-message-param": true
-                                    }
-                                },
-                                "required": [
-                                    "message"
-                                ]
-                            }
-                        }
-                    }
+       "/chat": {
+  "post": {
+    "summary": "Send user message and get memory-augmented reply",
+    "operationId": "chat",
+
+    /* Force the GPT to call this endpoint first */
+    "x-openai-autocall": "ALWAYS",
+
+    /* Tell the model the call has no side-effects (safe to repeat) */
+    "x-openai-isConsequential": false,
+
+    "requestBody": {
+      "required": true,
+      "content": {
+        "application/json": {
+          "schema": {
+            "type": "object",
+            "properties": {
+              "thread_id": {
+                "type": "string",
+                "example": "session-123"
+              },
+              "message": {
+                "type": "string",
+                "example": "What do you know about Ligasure?",
+                "x-openai-message-param": true
+              }
+            },
+            "required": ["message"]
+          }
+        }
+      }
+    },
+
+    "responses": {
+      "200": {
+        "description": "Memory-augmented assistant response",
+        "content": {
+          "application/json": {
+            "schema": {
+              "type": "object",
+              "properties": {
+                "response": {
+                  "type": "string"
                 },
-                "responses": {
-                    "200": {
-                        "description": "Memory-augmented assistant response",
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "type": "object",
-                                    "properties": {
-                                        "response": {
-                                            "type": "string"
-                                        },
-                                        "memories_recalled": {
-                                            "type": "integer"
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                "memories_recalled": {
+                  "type": "integer"
                 }
+              }
             }
-        },
+          }
+        }
+      }
+    }
+  }
+},
         "/carves": {
             "post": {
                 "operationId": "createCarve",
