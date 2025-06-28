@@ -339,7 +339,8 @@ def search_echoes():
     Combined semantic + tag/source search for Echoes.
     """
     query = request.args.get("query")
-    limit = min(int(request.args.get("limit", 5)), 15)
+    # default limit is now 8, still capped at 15
+    limit = min(int(request.args.get("limit", 8)), 15)
     importance_floor = float(request.args.get("importance_floor", 0.5))
     max_distance = float(request.args.get("max_distance", 0.8))
 
@@ -396,7 +397,7 @@ def search_echoes():
                 combined.append(hit)
                 seen.add(hit["id"])
 
-        # 4) Fetch full details for semantic hits
+        # 4) Fetch full details
         full_echoes = []
         for item in combined:
             if "echo_data" in item:
