@@ -3,7 +3,8 @@
   "name_for_human": "Nameless Memory Autopilot",
   "name_for_model": "nameless_autopilot",
   "description_for_human": "Fetches and injects relevant memories into Nameless’s responses.",
-  "description_for_model": "Plugin to get relevant memories before answering. Call GET /chat with JSON {thread_id, message} to receive memory snippets plus assistant response.",
+  "description_for_model": "Plugin to get relevant memories before answering. Call **POST** /chat with JSON {thread_id, message} …",
+
   "auth": {
     "type": "none"
   },
