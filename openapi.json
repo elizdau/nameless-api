@@ -41,11 +41,7 @@
   "post": {
     "summary": "Send user message and get memory-augmented reply",
     "operationId": "chat",
-
-    /* Force the GPT to call this endpoint first */
     "x-openai-autocall": "ALWAYS",
-
-    /* Tell the model the call has no side-effects (safe to repeat) */
     "x-openai-isConsequential": false,
 
     "requestBody": {
