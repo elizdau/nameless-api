@@ -15,11 +15,60 @@ HEADERS = {
     "Prefer": "return=representation"
 }
 
+from collections import deque
+import re
+
+# — Thread-local working-set cache settings —
+MAX_WORKING_SET = 8
+MAX_AGE         = 4
+conversation_cache = {}   # { thread_id: { "working_ids": deque, "turns_since_use": {} } }
+
+# Pre-compile your cue rules (you can load more from the DB later)
+compiled_rules = [
+    (re.compile(r"\bLigasure\b", re.IGNORECASE),
+     {"tags": ["surgical-tools"], "importance": ">0.6"}),
+    # …add any other literal-trigger filters here
+]
+
+
 app = Flask(__name__)
 
 # Helper function goes here!
 def pick_fields(records, *fields):
     return [{ f: r.get(f) for f in fields } for r in records]
+
+def init_thread(thread_id):
+    if thread_id not in conversation_cache:
+        conversation_cache[thread_id] = {
+            "working_ids": deque(maxlen=MAX_WORKING_SET),
+            "turns_since_use": {},
+        }
+
+def update_working_set(thread_id, new_ids):
+    cache = conversation_cache[thread_id]
+    # age-up & evict expired
+    for mid in list(cache["turns_since_use"]):
+        cache["turns_since_use"][mid] += 1
+        if cache["turns_since_use"][mid] > MAX_AGE:
+            try:
+                cache["working_ids"].remove(mid)
+            except ValueError:
+                pass
+            del cache["turns_since_use"][mid]
+    # add any brand-new IDs
+    for mid in new_ids:
+        if mid not in cache["turns_since_use"]:
+            cache["working_ids"].append(mid)
+            cache["turns_since_use"][mid] = 0
+    return list(cache["working_ids"])
+
+def cue_scan(user_message, thread_context):
+    hits = []
+    for pattern, filt in compiled_rules:
+        if pattern.search(user_message):
+            hits.append(filt)
+    return hits
+
 
 @app.route("/warmup", methods=["GET"])
 def warmup():
@@ -660,6 +709,59 @@ def get_anchor_by_persona(persona_name):
             "error": "Failed to fetch anchor entries", 
             "details": str(e)
         }), 500
+
+@app.route("/chat", methods=["POST"])
+def chat_with_autopilot():
+    data      = request.get_json()
+    user_msg  = data.get("message", "")
+    thread_id = data.get("thread_id", "default")
+
+    # L0: init our per-thread cache
+    init_thread(thread_id)
+
+    # L1: cue scan → any static filters
+    thread_ctx    = conversation_cache[thread_id]
+    triggered_f   = cue_scan(user_msg, thread_ctx)
+    # (you could map these filters to memory IDs if you have them)
+
+    # L2: semantic search via your Supabase edge function
+    resp = requests.post(
+        f"{SUPABASE_URL}/functions/v1/retrieve_memories",
+        headers=HEADERS,
+        json={
+            "userText":        user_msg,
+            "k":               15,
+            "importanceFloor": 0.3,
+            # optionally: "sentiment_hint": ..., "persona_hint": ...
+        }
+    )
+    candidates = resp.json().get("vecHits", [])
+
+    # pick top-N by distance (or your own scoring)
+    top_ids = [m["id"] for m in sorted(candidates, key=lambda m: m["distance"])[:MAX_WORKING_SET]]
+
+    # L0 (cont’d): update working-set cache
+    working_ids = update_working_set(thread_id, top_ids)
+
+    # L3: fetch those snippets
+    snippets = []
+    for mid in working_ids:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/Carves?id=eq.{mid}&select=summary_snippet",
+            headers=HEADERS
+        ).json()
+        if r:
+            snippets.append(r[0]["summary_snippet"])
+
+    # assemble your full prompt & call Nameless
+    prompt = build_prompt_with_memory(snippets, user_msg)
+    answer = call_nameless_api(prompt)
+
+    return jsonify({
+        "response":           answer,
+        "memories_recalled":  len(snippets)
+    }), 200
+
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
