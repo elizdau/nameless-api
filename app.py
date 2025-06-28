@@ -385,7 +385,7 @@ def search_echoes():
             "details": str(e)
         }), 500
 
-        @app.route("/spine", methods=["POST"])
+@app.route("/spine", methods=["POST"])
 def create_spine():
     """
     Create a new spine entry - core identity or value statements that define
