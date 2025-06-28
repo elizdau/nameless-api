@@ -759,7 +759,7 @@ def call_nameless_api(snippets, user_message):
 
     # 2. Call OpenAI
     resp = openai.ChatCompletion.create(
-        model="gpt-4o-mini",      # or whichever model you prefer
+        model="gpt-4o",      # or whichever model you prefer
         messages=messages,
         temperature=0.7,
         max_tokens=512
