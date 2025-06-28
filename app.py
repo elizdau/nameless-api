@@ -222,6 +222,59 @@ def update_carve(carve_id):
             "details": str(e)
         }), 500
 
+@app.route("/carves/search", methods=["GET"])
+def search_carves():
+    """
+    Semantic search across carves using vector embeddings.
+    """
+    query = request.args.get("query")
+    limit = int(request.args.get("limit", 10))
+    importance_floor = float(request.args.get("importance_floor", 0.4))
+    
+    if not query:
+        return jsonify({"error": "Query parameter required"}), 400
+    
+    try:
+        # Call your retrieve_memories function, filtered to just Carves
+        search_response = requests.post(
+            f"{SUPABASE_URL}/functions/v1/retrieve_memories",
+            headers=HEADERS,
+            json={
+                "userText": query,
+                "k": limit,
+                "importanceFloor": importance_floor
+            }
+        )
+        
+        if search_response.ok:
+            results = search_response.json()
+            carve_hits = results.get("vecHits", [])
+            
+            # Get full carve details for each hit
+            full_carves = []
+            for hit in carve_hits:
+                carve_res = requests.get(
+                    f"{SUPABASE_URL}/rest/v1/Carves?id=eq.{hit['id']}",
+                    headers=HEADERS
+                )
+                if carve_res.ok and carve_res.json():
+                    carve = carve_res.json()[0]
+                    carve["search_distance"] = hit["distance"]
+                    full_carves.append(carve)
+            
+            return jsonify(full_carves), 200
+        else:
+            return jsonify({
+                "error": "Search failed", 
+                "details": search_response.text
+            }), 500
+            
+    except Exception as e:
+        return jsonify({
+            "error": "Failed to search carves", 
+            "details": str(e)
+        }), 500
+
 @app.route("/echoes", methods=["POST"])
 def create_echo():
     """
