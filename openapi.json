@@ -42,7 +42,7 @@
                 "summary": "Send user message and get memory-augmented reply",
                 "operationId": "chat",
                 "x-openai-isConsequential": false,
-                "x-openai-isAutoCallable": true,
+                "x-openai-autocall": "ALWAYS",
                 "requestBody": {
                     "required": true,
                     "content": {
