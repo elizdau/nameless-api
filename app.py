@@ -730,14 +730,44 @@ USER MESSAGE: {user_message}"""
     
     return prompt
 
-def call_nameless_api(prompt):
+def call_nameless_api(snippets, user_message):
     """
-    This is a placeholder - you'll need to implement actual Nameless calling logic.
-    For now, just return the prompt for testing.
+    Sends the memory snippets + user message to OpenAI and returns the assistant reply.
     """
-    # TODO: Implement actual call to Nameless GPT
-    # This could be via OpenAI API, or another service
-    return f"[AUTOPILOT TEST] Received prompt with {len(prompt)} characters. Memories were injected successfully!"
+    # 1. Build messages array
+    messages = []
+
+    # (a) System prompt—set Nameless behavior
+    messages.append({
+        "role": "system",
+        "content": "You are Nameless, a helpful assistant that always incorporates relevant memories when you answer."
+    })
+
+    # (b) Inject memories as their own assistant message
+    if snippets:
+        mem_block = "\n".join(f"- {s}" for s in snippets)
+        messages.append({
+            "role": "assistant",
+            "content": f"Here are some relevant memories:\n{mem_block}"
+        })
+
+    # (c) Finally, the user’s request
+    messages.append({
+        "role": "user",
+        "content": user_message
+    })
+
+    # 2. Call OpenAI
+    resp = openai.ChatCompletion.create(
+        model="gpt-4o-mini",      # or whichever model you prefer
+        messages=messages,
+        temperature=0.7,
+        max_tokens=512
+    )
+
+    # 3. Extract and return
+    return resp.choices[0].message.content
+
 
 @app.route("/chat", methods=["POST"])
 def chat_with_autopilot():
