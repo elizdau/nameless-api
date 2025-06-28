@@ -312,7 +312,7 @@ def create_echo():
             "details": str(e)
         }), 500
 
-        @app.route("/echoes/search", methods=["GET"])
+@app.route("/echoes/search", methods=["GET"])
 def search_echoes():
     """
     Semantic search across echo memories with smart limiting to prevent overwhelm.
