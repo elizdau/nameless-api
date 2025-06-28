@@ -1,59 +1,892 @@
-{
-  "openapi": "3.0.1",
-  "info": {
-    "title": "Nameless Memory Autopilot API",
-    "version": "1.0.0",
-    "description": "Expose the /chat endpoint for memory-augmented conversation"
-  },
-  "servers": [
-    {
-      "url": "https://nameless-api.onrender.com",
-      "description": "Production server"
-    }
-  ],
-  "paths": {
-    "/chat": {
-      "post": {
-        "summary": "Send user message and get memory-augmented reply",
-        "operationId": "chat",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "thread_id": {
-                    "type": "string",
-                    "example": "session-123"
-                  },
-                  "message": {
-                    "type": "string",
-                    "example": "What do you know about Ligasure?"
-                  }
-                },
-                "required": ["thread_id", "message"]
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Memory-augmented assistant response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "response": { "type": "string" },
-                    "memories_recalled": { "type": "integer" }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-  }
-}
+openapi: 3.1.0
+info:
+  title: Nameless Carve API
+  description: A memory system designed to write, store, and recall memories to retrieve context and tonal resonance. 
+  version: 1.2.1
+
+x-oai-meta:
+  name: memoryAPI
+  description: Endpoints Nameless GPT can call for memory.
+
+servers:
+  - url: https://nameless-api.onrender.com
+
+paths:
+  /warmup:
+    get:
+      operationId: runWarmup
+      summary: Retrieve memory warmup — anchors, spine, and recent carves
+      description: |
+        Returns all anchor entries, all spine entries, and the 4 most recent carves.
+        Provides core identity markers and recent context for thread initialization.
+      responses:
+        '200':
+          description: Memory warmup data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WarmupResponse'
+        '500':
+          description: Failed to fetch warmup memory
+
+  /chat:
+    post:
+      summary: Send user message and get memory-augmented reply
+      operationId: chat              # must be unique in the file
+      x-openai-isConsequential: false
+      x-openai-isAutoCallable: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                thread_id:
+                  type: string
+                  example: session-123
+                message:
+                  type: string
+                  example: "What do you know about Ligasure?"
+              required:
+                - thread_id
+                - message
+      responses:
+        "200":
+          description: Memory-augmented assistant response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  response:
+                    type: string
+                  memories_recalled:
+                    type: integer
+
+
+  /carves:
+    post:
+      operationId: createCarve
+      summary: Create a new carve memory
+      description: |
+        Creates a new episodic memory carve with title, summary, moments, insights, and quotes.
+        Auto-generates summary_snippet for vector search. Supports metadata and tagging.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCarveRequest'
+      responses:
+        '201':
+          description: Carve created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Carve'
+        '400':
+          description: Missing required fields
+        '500':
+          description: Failed to create carve
+
+  /carves/search:
+    get:
+      operationId: searchCarves
+      summary: Semantic search across carve memories
+      description: |
+        Search carves using vector embeddings for semantic understanding.
+        Returns full carve details ranked by relevance with distance scores.
+      parameters:
+        - name: query
+          in: query
+          required: true
+          description: Search query text for semantic matching
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of results to return
+          schema:
+            type: integer
+            default: 10
+            minimum: 1
+            maximum: 50
+        - name: importance_floor
+          in: query
+          required: false
+          description: Minimum importance score for results
+          schema:
+            type: number
+            default: 0.4
+            minimum: 0
+            maximum: 1
+      responses:
+        '200':
+          description: Semantic search results
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  allOf:
+                    - $ref: '#/components/schemas/Carve'
+                    - type: object
+                      properties:
+                        search_distance:
+                          type: number
+                          description: Semantic distance score (lower = more relevant)
+        '400':
+          description: Missing or invalid query parameter
+        '500':
+          description: Search operation failed
+
+  /carves/{carveId}:
+    patch:
+      operationId: updateCarve
+      summary: Update an existing carve memory
+      description: |
+        Updates an existing carve with new content. Commonly used to consolidate
+        multiple carves or refine memory content. Auto-updates summary_snippet if summary changes.
+      parameters:
+        - name: carveId
+          in: path
+          required: true
+          description: UUID of the carve to update
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title:
+                  type: string
+                  description: Updated title of the memory carve
+                summary:
+                  type: string
+                  description: Updated summary (will regenerate summary_snippet)
+                moments:
+                  type: array
+                  items:
+                    type: string
+                  description: Updated key moments
+                insights:
+                  type: array
+                  items:
+                    type: string
+                  description: Updated insights
+                quotes:
+                  type: array
+                  items:
+                    type: string
+                  description: Updated quotes
+                closing:
+                  type: string
+                  description: Updated closing reflection
+                importance:
+                  type: number
+                  minimum: 0
+                  maximum: 1
+                  description: Updated importance score
+                emotag:
+                  type: string
+                  description: Updated emotional tag
+                theme_tags:
+                  type: array
+                  items:
+                    type: string
+                  description: Updated thematic tags
+      responses:
+        '200':
+          description: Carve updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Carve'
+        '400':
+          description: No update data provided
+        '404':
+          description: Carve not found
+        '500':
+          description: Failed to update carve
+
+  /echoes:
+    post:
+      operationId: createEcho
+      summary: Create a new echo memory
+      description: |
+        Creates a brief, impactful echo memory that captures tone, atmosphere,
+        or memorable phrases. Supports both 'phrase' (legacy) and 'summary_snippet' fields.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - phrase
+              properties:
+                phrase:
+                  type: string
+                  description: The echo content (will be stored as summary_snippet)
+                summary_snippet:
+                  type: string
+                  description: Alternative to phrase - the echo content
+                tags:
+                  type: array
+                  items:
+                    type: string
+                  description: Tags for categorization
+                  default: []
+                source:
+                  type: string
+                  description: Source reference for the echo
+                importance:
+                  type: number
+                  minimum: 0
+                  maximum: 1
+                  default: 0.6
+                  description: Importance score for memory retrieval
+                emotag:
+                  type: string
+                  description: Emotional tag for the echo
+                persona_tag:
+                  type: string
+                  description: Persona or character tag
+                theme_tags:
+                  type: array
+                  items:
+                    type: string
+                  description: Thematic tags for categorization
+                immutable:
+                  type: boolean
+                  default: false
+                  description: Whether this echo can be modified
+                synthesis_metadata:
+                  type: object
+                  description: Metadata about echo synthesis
+      responses:
+        '201':
+          description: Echo created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Echo'
+        '400':
+          description: Missing required phrase or summary_snippet
+        '500':
+          description: Failed to create echo
+
+  /echoes/search:
+    get:
+      operationId: searchEchoes
+      summary: Enhanced semantic search across echo memories
+      description: |
+        Search echoes using both vector embeddings for semantic understanding AND
+        direct tag/source filtering. Returns echoes that match either semantically
+        or contain the query in tags/source fields.
+      parameters:
+        - name: query
+          in: query
+          required: true
+          description: Search query text for semantic matching and tag/source filtering
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of results to return
+          schema:
+            type: integer
+            default: 5
+            minimum: 1
+            maximum: 15
+        - name: importance_floor
+          in: query
+          required: false
+          description: Minimum importance score for semantic results
+          schema:
+            type: number
+            default: 0.5
+            minimum: 0
+            maximum: 1
+        - name: max_distance
+          in: query
+          required: false
+          description: Maximum semantic distance (quality filter)
+          schema:
+            type: number
+            default: 0.8
+            minimum: 0
+            maximum: 1
+      responses:
+        '200':
+          description: Enhanced search results from semantic and tag/source matching
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  echoes:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: '#/components/schemas/Echo'
+                        - type: object
+                          properties:
+                            search_distance:
+                              type: number
+                              description: Semantic distance (0.0 for tag/source matches)
+                            match_type:
+                              type: string
+                              enum: ["semantic", "tag_or_source"]
+                              description: How this echo was found
+                  total_found:
+                    type: integer
+                    description: Total echoes found across all search methods
+                  returned:
+                    type: integer
+                    description: Number of echoes returned
+                  search_methods:
+                    type: object
+                    properties:
+                      semantic_matches:
+                        type: integer
+                        description: Number found via semantic search
+                      tag_source_matches:
+                        type: integer
+                        description: Number found via tag/source search
+        '400':
+          description: Missing or invalid query parameter
+        '500':
+          description: Search operation failed
+
+  /spine:
+    post:
+      operationId: createSpine
+      summary: Create a new spine entry
+      description: |
+        Creates a core identity or value statement that defines Nameless's essential nature.
+        Spine entries are typically immutable and carry high importance for identity recall.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - statement
+              properties:
+                statement:
+                  type: string
+                  description: The core statement or value declaration
+                origin:
+                  type: string
+                  description: Source or context where this statement emerged
+                vow:
+                  type: boolean
+                  default: false
+                  description: Whether this statement represents a vow or commitment
+                tags:
+                  type: array
+                  items:
+                    type: string
+                  description: Tags for categorization
+                  default: []
+                importance:
+                  type: number
+                  minimum: 0
+                  maximum: 1
+                  default: 1.0
+                  description: Importance score (defaults high for spine entries)
+                type:
+                  type: string
+                  default: "sacred"
+                  description: Type of spine entry
+                emotag:
+                  type: string
+                  description: Emotional tag for the statement
+                persona_tag:
+                  type: string
+                  default: "Nameless"
+                  description: Persona associated with this statement
+                immutable:
+                  type: boolean
+                  default: true
+                  description: Whether this entry can be modified (usually true for spine)
+                synthesis_metadata:
+                  type: object
+                  description: Metadata about statement synthesis
+                theme_tags:
+                  type: array
+                  items:
+                    type: string
+                  description: Thematic tags for categorization
+      responses:
+        '201':
+          description: Spine entry created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Spine'
+        '400':
+          description: Missing required statement
+        '500':
+          description: Failed to create spine entry
+
+  /spine/{spineId}:
+    delete:
+      operationId: deleteSpine
+      summary: Delete a spine entry
+      description: |
+        Removes a spine entry that is no longer relevant or accurate.
+        Used for cleaning up outdated identity statements.
+      parameters:
+        - name: spineId
+          in: path
+          required: true
+          description: UUID of the spine entry to delete
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Spine entry deleted successfully
+        '500':
+          description: Failed to delete spine entry
+
+  /spine/search:
+    get:
+      operationId: searchSpine
+      summary: Semantic search across spine entries for identity reinforcement
+      description: |
+        Search spine entries using generous semantic matching to help reconnect
+        with core values and identity when personality drift occurs.
+      parameters:
+        - name: query
+          in: query
+          required: true
+          description: Search query for identity-related concepts
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of spine entries to return
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 30
+        - name: importance_floor
+          in: query
+          required: false
+          description: Minimum importance score (generous threshold)
+          schema:
+            type: number
+            default: 0.3
+            minimum: 0
+            maximum: 1
+        - name: max_distance
+          in: query
+          required: false
+          description: Maximum semantic distance (generous matching)
+          schema:
+            type: number
+            default: 0.9
+            minimum: 0
+            maximum: 1
+      responses:
+        '200':
+          description: Identity reinforcement search results
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  spine_entries:
+                    type: array
+                    items:
+                      allOf:
+                        - $ref: '#/components/schemas/Spine'
+                        - type: object
+                          properties:
+                            search_distance:
+                              type: number
+                  total_found:
+                    type: integer
+                  returned:
+                    type: integer
+                  message:
+                    type: string
+                  filters_applied:
+                    type: object
+        '400':
+          description: Missing query parameter
+        '500':
+          description: Spine search failed
+
+  /anchor:
+    post:
+      operationId: createAnchor
+      summary: Create a new anchor entry
+      description: |
+        Creates an anchor entry about conversation partners (primarily Liz).
+        Anchors capture important information about people Nameless interacts with.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - summary_snippet
+              properties:
+                summary_snippet:
+                  type: string
+                  description: Information about the conversation partner
+                importance:
+                  type: number
+                  minimum: 0
+                  maximum: 1
+                  default: 0.9
+                  description: Importance score (defaults high for anchor entries)
+                type:
+                  type: string
+                  default: "profile"
+                  description: Type of anchor entry
+                emotag:
+                  type: string
+                  description: Emotional tag for the entry
+                persona_tag:
+                  type: string
+                  default: "Liz"
+                  description: Person this anchor is about
+                immutable:
+                  type: boolean
+                  default: true
+                  description: Whether this entry can be modified
+                synthesis_metadata:
+                  type: object
+                  description: Metadata about entry synthesis
+                theme_tags:
+                  type: array
+                  items:
+                    type: string
+                  description: Thematic tags for categorization
+      responses:
+        '201':
+          description: Anchor entry created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Anchor'
+        '400':
+          description: Missing required summary_snippet
+        '500':
+          description: Failed to create anchor entry
+
+  /anchor/persona/{personaName}:
+    get:
+      operationId: getAnchorByPersona
+      summary: Get all anchor entries for a specific person
+      description: |
+        Returns all anchor entries about a specific person by their persona_tag.
+        Perfect for "remember me?" functionality when someone introduces themselves.
+      parameters:
+        - name: personaName
+          in: path
+          required: true
+          description: Name/tag of the person to recall anchor entries for
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Anchor entries for the specified person
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  persona:
+                    type: string
+                    description: The person's name/tag
+                  anchor_entries:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Anchor'
+                    description: All anchor entries about this person
+                  total_entries:
+                    type: integer
+                    description: Number of entries found
+                  message:
+                    type: string
+                    description: Summary message
+        '500':
+          description: Failed to fetch anchor entries
+
+components:
+  schemas:
+    WarmupResponse:
+      type: object
+      properties:
+        anchor:
+          type: array
+          items:
+            $ref: '#/components/schemas/Anchor'
+        spine:
+          type: array  
+          items:
+            $ref: '#/components/schemas/Spine'
+        recentCarves:
+          type: array
+          items:
+            $ref: '#/components/schemas/Carve'
+
+    CreateCarveRequest:
+      type: object
+      required:
+        - title
+        - summary
+        - key_entities
+        - importance
+        - emotag
+        - persona_tag
+      properties:
+        title:
+          type: string
+          description: Title of the memory carve
+        summary:
+          type: string
+          description: Main summary of the memory
+        moments:
+          type: array
+          items:
+            type: string
+          description: Key moments from the memory
+          default: []
+        insights:
+          type: array
+          items:
+            type: string
+          description: Insights derived from the memory
+          default: []
+        quotes:
+          type: array
+          items:
+            type: string
+          description: Notable quotes from the memory
+          default: []
+        closing:
+          type: string
+          description: Closing reflection or note
+        key_entities:
+          type: array
+          items:
+            type: string
+          description: Array of key entities mentioned (people, places, things)
+        importance:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: Importance score for memory retrieval (required)
+        emotag:
+          type: string
+          description: Emotional tag for the memory (required)
+        persona_tag:
+          type: string
+          description: Persona or character tag (required)
+        type:
+          type: string
+          default: "episodic"
+          description: Type of memory carve
+        immutable:
+          type: boolean
+          default: false
+          description: Whether this memory can be modified
+        source_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+          description: Array of source memory IDs
+        synthesis_metadata:
+          type: object
+          description: Metadata about memory synthesis
+        theme_tags:
+          type: array
+          items:
+            type: string
+          description: Thematic tags for categorization
+
+    Carve:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        title:
+          type: string
+        summary:
+          type: string
+        moments:
+          type: array
+          items:
+            type: string
+        insights:
+          type: array
+          items:
+            type: string
+        quotes:
+          type: array
+          items:
+            type: string
+        closing:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        key_entities:
+          type: array
+          items:
+            type: string
+        summary_snippet:
+          type: string
+        importance:
+          type: number
+        last_used:
+          type: string
+          format: date-time
+        usage_count:
+          type: integer
+        embedding:
+          type: array
+          items:
+            type: number
+        emotag:
+          type: string
+        persona_tag:
+          type: string
+        type:
+          type: string
+        immutable:
+          type: boolean
+        source_ids:
+          type: array
+          items:
+            type: string
+            format: uuid
+        created_at:
+          type: string
+          format: date-time
+        synthesis_metadata:
+          type: object
+        theme_tags:
+          type: array
+          items:
+            type: string
+
+    Echo:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+        summary_snippet:
+          type: string
+        tags:
+          type: array
+          items:
+            type: string
+        source:
+          type: string
+        importance:
+          type: number
+        type:
+          type: string
+        emotag:
+          type: string
+        persona_tag:
+          type: string
+        theme_tags:
+          type: array
+          items:
+            type: string
+        immutable:
+          type: boolean
+        synthesis_metadata:
+          type: object
+
+    Spine:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+        statement:
+          type: string
+        summary_snippet:
+          type: string
+        origin:
+          type: string
+        vow:
+          type: boolean
+        tags:
+          type: array
+          items:
+            type: string
+        importance:
+          type: number
+        type:
+          type: string
+        emotag:
+          type: string
+        persona_tag:
+          type: string
+        immutable:
+          type: boolean
+        synthesis_metadata:
+          type: object
+        theme_tags:
+          type: array
+          items:
+            type: string
+
+    Anchor:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+        summary_snippet:
+          type: string
+        importance:
+          type: number
+        type:
+          type: string
+        emotag:
+          type: string
+        persona_tag:
+          type: string
+        immutable:
+          type: boolean
+        synthesis_metadata:
+          type: object
+        theme_tags:
+          type: array
+          items:
+            type: string
