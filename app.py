@@ -5,11 +5,12 @@ from datetime import datetime
 import uuid
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY")
+SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
 
+# And line 9-13 back to:
 HEADERS = {
-    "apikey": SUPABASE_ANON_KEY,
-    "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
+    "apikey": SUPABASE_API_KEY,
+    "Authorization": f"Bearer {SUPABASE_API_KEY}",
     "Content-Type": "application/json",
     "Prefer": "return=representation"
 }
