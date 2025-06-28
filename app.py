@@ -336,107 +336,95 @@ def create_echo():
 @app.route("/echoes/search", methods=["GET"])
 def search_echoes():
     """
-    Enhanced echo search: semantic search + tag/source filtering.
+    Combined semantic + tag/source search for Echoes.
     """
     query = request.args.get("query")
-    limit = int(request.args.get("limit", 5))
+    limit = min(int(request.args.get("limit", 5)), 15)
     importance_floor = float(request.args.get("importance_floor", 0.5))
     max_distance = float(request.args.get("max_distance", 0.8))
-    
+
     if not query:
-        return jsonify({"error": "Query parameter required"}), 400
-    
-    limit = min(limit, 15)
-    
+        return jsonify({"error": "Query parameter 'query' is required"}), 400
+
     try:
-        # 1. Semantic search via edge function (search all tables, filter for Echoes)
-        search_response = requests.post(
+        # 1) Semantic search via edge function
+        resp = requests.post(
             f"{SUPABASE_URL}/functions/v1/retrieve_memories",
             headers=HEADERS,
             json={
                 "userText": query,
-                "k": min(limit * 3, 30),  # Get more results to filter from
+                "k": limit,
                 "importanceFloor": importance_floor
             }
         )
-        
-        semantic_hits = []
-        if search_response.ok:
-            results = search_response.json()
-            all_hits = results.get("vecHits", [])
-            # Filter for Echoes with good distance scores
-            semantic_hits = [hit for hit in all_hits 
-                           if hit.get("table_source") == "Echoes" and hit["distance"] <= max_distance]
-        
-        # 2. Tag/Source search via direct Supabase query
-        tag_source_res = requests.get(
-            f"{SUPABASE_URL}/rest/v1/Echoes?or=(tags.cs.{{{query}}},source.ilike.*{query}*)&order=timestamp.desc&limit={limit}&select=id,timestamp,summary_snippet,tags,source,importance,type,emotag,persona_tag,theme_tags",
+        if not resp.ok:
+            return jsonify({"error": "Semantic search failed", "details": resp.text}), 500
+
+        vec_hits = resp.json().get("vecHits", [])
+        semantic_hits = [
+            h for h in vec_hits
+            if h.get("table_source") == "Echoes" and h["distance"] <= max_distance
+        ][:limit]
+
+        # 2) Tag/source search via REST
+        tag_res = requests.get(
+            f"{SUPABASE_URL}/rest/v1/Echoes"
+            f"?or=(tags.cs.{{{query}}},source.ilike.*{query}*)&limit={limit}"
+            "&select=id,timestamp,summary_snippet,tags,source,importance,type,emotag,persona_tag,theme_tags",
             headers=HEADERS
         )
-        
-        tag_source_hits = []
-        if tag_source_res.ok:
-            for echo in tag_source_res.json():
-                tag_source_hits.append({
-                    "id": echo["id"],
-                    "distance": 0.0,  # Perfect match for tag/source
-                    "match_type": "tag_or_source",
-                    "echo_data": echo  # Store the full echo data
+        tag_hits = []
+        if tag_res.ok:
+            for e in tag_res.json():
+                tag_hits.append({
+                    "id": e["id"],
+                    "search_distance": 0.0,
+                    "echo_data": e
                 })
-        
-        # 3. Combine and deduplicate
-        all_hit_ids = set()
-        combined_hits = []
-        
-        # Add semantic hits first (with distance scores)
-        for hit in semantic_hits[:limit]:
-            if hit["id"] not in all_hit_ids:
-                hit["match_type"] = "semantic"
-                combined_hits.append(hit)
-                all_hit_ids.add(hit["id"])
-        
-        # Add tag/source hits (if not already included)
-        for hit in tag_source_hits:
-            if hit["id"] not in all_hit_ids and len(combined_hits) < limit:
-                combined_hits.append(hit)
-                all_hit_ids.add(hit["id"])
-        
-        # 4. Get full echo details (only for semantic hits, tag/source already have data)
+
+        # 3) Combine & dedupe
+        seen = set()
+        combined = []
+
+        for hit in semantic_hits:
+            if hit["id"] not in seen:
+                combined.append({"id": hit["id"], "search_distance": hit["distance"]})
+                seen.add(hit["id"])
+
+        for hit in tag_hits:
+            if hit["id"] not in seen and len(combined) < limit:
+                combined.append(hit)
+                seen.add(hit["id"])
+
+        # 4) Fetch full details for semantic hits
         full_echoes = []
-        for hit in combined_hits:
-            if hit.get("echo_data"):
-                # Already have full data from tag/source search
-                echo = hit["echo_data"]
-                echo["search_distance"] = hit["distance"]
-                echo["match_type"] = hit["match_type"]
-                full_echoes.append(echo)
+        for item in combined:
+            if "echo_data" in item:
+                echo = item["echo_data"]
             else:
-                # Need to fetch data for semantic hits
-                echo_res = requests.get(
-                    f"{SUPABASE_URL}/rest/v1/Echoes?id=eq.{hit['id']}&select=id,timestamp,summary_snippet,tags,source,importance,type,emotag,persona_tag,theme_tags",
+                detail_res = requests.get(
+                    f"{SUPABASE_URL}/rest/v1/Echoes"
+                    f"?id=eq.{item['id']}"
+                    "&select=id,timestamp,summary_snippet,tags,source,importance,type,emotag,persona_tag,theme_tags",
                     headers=HEADERS
                 )
-                if echo_res.ok and echo_res.json():
-                    echo = echo_res.json()[0]
-                    echo["search_distance"] = hit["distance"]
-                    echo["match_type"] = hit["match_type"]
-                    full_echoes.append(echo)
-        
+                echo = detail_res.json()[0] if detail_res.ok and detail_res.json() else None
+
+            if echo:
+                echo["search_distance"] = item["search_distance"]
+                full_echoes.append(echo)
+
         return jsonify({
             "echoes": full_echoes,
-            "total_found": len(semantic_hits) + len(tag_source_hits),
-            "returned": len(full_echoes),
-            "search_methods": {
-                "semantic_matches": len(semantic_hits),
-                "tag_source_matches": len(tag_source_hits)
-            }
+            "returned": len(full_echoes)
         }), 200
-        
-    except Exception as e:
+
+    except Exception as err:
         return jsonify({
-            "error": "Failed to search echoes", 
-            "details": str(e)
+            "error": "Failed to search echoes",
+            "details": str(err)
         }), 500
+
         
 @app.route("/spine", methods=["POST"])
 def create_spine():
