@@ -758,12 +758,13 @@ def call_nameless_api(snippets, user_message):
     })
 
     # 2. Call OpenAI
-    resp = openai.ChatCompletion.create(
-        model="gpt-4o",      # or whichever model you prefer
+
+    resp = openai.chat.completions.create(
+        model="gpt-4o-mini",
         messages=messages,
         temperature=0.7,
         max_tokens=512
-    )
+)
 
     # 3. Extract and return
     return resp.choices[0].message.content
