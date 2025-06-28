@@ -86,7 +86,7 @@
           }
         }
       }
-    }
+    },
         "/carves": {
             "post": {
                 "operationId": "createCarve",
