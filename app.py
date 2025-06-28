@@ -772,56 +772,46 @@ def call_nameless_api(snippets, user_message):
 
 @app.route("/chat", methods=["POST"])
 def chat_with_autopilot():
-    data      = request.get_json()
-    user_msg  = data.get("message", "")
-    thread_id = data.get("thread_id", "default")
+    try:
+        data      = request.get_json()
+        user_msg  = data.get("message", "")
+        thread_id = data.get("thread_id", "default")
 
-    # L0: init our per-thread cache
-    init_thread(thread_id)
+        init_thread(thread_id)
+        triggered_f = cue_scan(user_msg, conversation_cache[thread_id])
 
-    # L1: cue scan → any static filters
-    thread_ctx    = conversation_cache[thread_id]
-    triggered_f   = cue_scan(user_msg, thread_ctx)
-    # (you could map these filters to memory IDs if you have them)
+        resp = requests.post(
+            f"{SUPABASE_URL}/functions/v1/retrieve_memories",
+            headers=HEADERS,
+            json={"userText": user_msg, "k": 15, "importanceFloor": 0.3}
+        )
+        candidates = resp.json().get("vecHits", [])
+        top_ids = [m["id"] for m in sorted(candidates, key=lambda m: m["distance"])[:MAX_WORKING_SET]]
+        working_ids = update_working_set(thread_id, top_ids)
 
-    # L2: semantic search via your Supabase edge function
-    resp = requests.post(
-        f"{SUPABASE_URL}/functions/v1/retrieve_memories",
-        headers=HEADERS,
-        json={
-            "userText":        user_msg,
-            "k":               15,
-            "importanceFloor": 0.3,
-            # optionally: "sentiment_hint": ..., "persona_hint": ...
-        }
-    )
-    candidates = resp.json().get("vecHits", [])
+        snippets = []
+        for mid in working_ids:
+            r = requests.get(
+                f"{SUPABASE_URL}/rest/v1/Carves?id=eq.{mid}&select=summary_snippet",
+                headers=HEADERS
+            ).json()
+            if r:
+                snippets.append(r[0]["summary_snippet"])
 
-    # pick top-N by distance (or your own scoring)
-    top_ids = [m["id"] for m in sorted(candidates, key=lambda m: m["distance"])[:MAX_WORKING_SET]]
+        # Real GPT call
+        answer = call_nameless_api(snippets, user_msg)
 
-    # L0 (cont’d): update working-set cache
-    working_ids = update_working_set(thread_id, top_ids)
+        return jsonify({
+            "response":           answer,
+            "memories_recalled":  len(snippets)
+        }), 200
 
-    # L3: fetch those snippets
-    snippets = []
-    for mid in working_ids:
-        r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/Carves?id=eq.{mid}&select=summary_snippet",
-            headers=HEADERS
-        ).json()
-        if r:
-            snippets.append(r[0]["summary_snippet"])
-
-    # assemble your full prompt & call Nameless
-    prompt = build_prompt_with_memory(snippets, user_msg)
-    answer = call_nameless_api(snippets, user_msg)
-
-    return jsonify({
-        "response":           answer,
-        "memories_recalled":  len(snippets)
-    }), 200
-
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "error":     str(e),
+            "traceback": traceback.format_exc().splitlines()
+        }), 500
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
