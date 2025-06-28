@@ -5,12 +5,12 @@ from datetime import datetime
 import uuid
 
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
+SUPABASE_ANON_KEY = os.environ.get("SUPABASE_ANON_KEY")
 SUPABASE_TABLE = "Carves"
 
 HEADERS = {
-    "apikey": SUPABASE_API_KEY,
-    "Authorization": f"Bearer {SUPABASE_API_KEY}",
+    "apikey": SUPABASE_ANON_KEY,
+    "Authorization": f"Bearer {SUPABASE_ANON_KEY}",
     "Content-Type": "application/json",
     "Prefer": "return=representation"
 }
