@@ -814,7 +814,7 @@ def chat_with_autopilot():
 
     # assemble your full prompt & call Nameless
     prompt = build_prompt_with_memory(snippets, user_msg)
-    answer = call_nameless_api(prompt)
+    answer = call_nameless_api(snippets, user_msg)
 
     return jsonify({
         "response":           answer,
