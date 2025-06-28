@@ -227,22 +227,25 @@ def update_carve(carve_id):
 def search_carves():
     """
     Semantic search across carves using vector embeddings.
+    Returns full carve content with smart limits to prevent overload.
     """
     query = request.args.get("query")
-    limit = int(request.args.get("limit", 10))
+    limit = int(request.args.get("limit", 3))  # Lower default - only 3 carves
     importance_floor = float(request.args.get("importance_floor", 0.4))
     
     if not query:
         return jsonify({"error": "Query parameter required"}), 400
     
+    # Cap the limit to prevent overload
+    limit = min(limit, 5)  # Hard ceiling of 5 full carves max
+    
     try:
-        # Call your retrieve_memories function, filtered to just Carves
         search_response = requests.post(
             f"{SUPABASE_URL}/functions/v1/retrieve_memories",
             headers=HEADERS,
             json={
                 "userText": query,
-                "k": limit,
+                "k": limit,  # Only ask for what we need
                 "importanceFloor": importance_floor
             }
         )
@@ -251,11 +254,11 @@ def search_carves():
             results = search_response.json()
             carve_hits = results.get("vecHits", [])
             
-            # Get full carve details for each hit
+            # Get full carve details for each hit (but limited number)
             full_carves = []
-            for hit in carve_hits:
+            for hit in carve_hits[:limit]:  # Extra safety - only take the limit
                 carve_res = requests.get(
-                    f"{SUPABASE_URL}/rest/v1/Carves?id=eq.{hit['id']}",
+                    f"{SUPABASE_URL}/rest/v1/Carves?id=eq.{hit['id']}&select=id,title,timestamp,summary,moments,insights,quotes,closing,importance,emotag",
                     headers=HEADERS
                 )
                 if carve_res.ok and carve_res.json():
@@ -263,7 +266,12 @@ def search_carves():
                     carve["search_distance"] = hit["distance"]
                     full_carves.append(carve)
             
-            return jsonify(full_carves), 200
+            return jsonify({
+                "carves": full_carves,
+                "total_found": len(carve_hits),
+                "returned": len(full_carves),
+                "message": f"Found {len(carve_hits)} matches, returning {len(full_carves)} full carves"
+            }), 200
         else:
             return jsonify({
                 "error": "Search failed", 
