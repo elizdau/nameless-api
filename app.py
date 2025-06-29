@@ -867,39 +867,20 @@ def chat_with_autopilot():
         for mid in working_ids:
             # Try carves first
             r = requests.get(
-                f"{SUPABASE_URL}/rest/v1/Carves?id=eq.{mid}&select=summary_snippet,title",
+                f"{SUPABASE_URL}/rest/v1/Carves?id=eq.{mid}&select=summary_snippet",
                 headers=HEADERS
             ).json()
             if r:
-                carve = r[0]
-                snippet = f"[CARVE: {carve.get('title', 'Untitled')}] {carve['summary_snippet']}"
+                snippet = f"[CARVE] {r[0]['summary_snippet']}"
                 snippets.append(snippet)
             else:
                 # Try echoes if not in carves
                 r = requests.get(
-                    f"{SUPABASE_URL}/rest/v1/Echoes?id=eq.{mid}&select=summary_snippet,tags,persona_tag,source",
+                    f"{SUPABASE_URL}/rest/v1/Echoes?id=eq.{mid}&select=summary_snippet",
                     headers=HEADERS
                 ).json()
                 if r:
-                    echo = r[0]
-                    tags_str = ', '.join(echo.get('tags', [])) if echo.get('tags') else 'no tags'
-                    persona = echo.get('persona_tag', '')
-                    source = echo.get('source', '')
-                    
-                    # Handle speaker identification
-                    if persona:
-                        speaker_part = f"[ECHO by {persona}]"
-                    elif source:
-                        speaker_part = f"[ECHO from {source}]"  # Old format with speaker in source
-                    else:
-                        speaker_part = "[ECHO]"
-                    
-                    # Add source context if it exists and is different from persona
-                    source_str = ""
-                    if source and source.lower() != persona.lower():
-                        source_str = f" (context: {source})"
-                    
-                    snippet = f"{speaker_part} {echo['summary_snippet']} (tags: {tags_str}){source_str}"
+                    snippet = f"[ECHO] {r[0]['summary_snippet']}"
                     snippets.append(snippet)
         
         # Check if we should include spine (identity/values context)
