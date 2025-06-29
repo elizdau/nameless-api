@@ -654,7 +654,7 @@ def create_anchor():
     try:
         print("=== ANCHOR DEBUG START ===")
         data = request.get_json()
-        print(f"Received data: {data}")
+        app.logger.info(f"Received data: {data}")
         
         # Required field validation
         summary_snippet = data.get("summary_snippet")
