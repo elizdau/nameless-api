@@ -964,6 +964,20 @@ def chat_with_autopilot():
             "error": str(e),
             "traceback": traceback.format_exc().splitlines()
         }), 500
+
+@app.route("/update-snippets", methods=["POST"])
+def update_snippets_endpoint():
+    """Endpoint to trigger snippet updates"""
+    try:
+        # Import the function from your new file
+        from update_snippets import update_all_carve_snippets
+        
+        # Run the update
+        result = update_all_carve_snippets()
+        
+        return jsonify({"status": "success", "message": "Snippet updates completed"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
         
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
