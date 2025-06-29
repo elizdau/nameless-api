@@ -4,6 +4,7 @@ import requests
 from datetime import datetime
 import uuid
 import openai
+from datetime import datetime, timezone
 
 # your Supabase config…
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -802,19 +803,64 @@ def chat_with_autopilot():
         data = request.get_json()
         user_msg = data.get("message", "")
         thread_id = data.get("thread_id", "default")
-
+        
         init_thread(thread_id)
         triggered_f = cue_scan(user_msg, conversation_cache[thread_id])
-
+        
         resp = requests.post(
             f"{SUPABASE_URL}/functions/v1/retrieve_memories",
             headers=HEADERS,
             json={"userText": user_msg, "k": 15, "importanceFloor": 0.3}
         )
         candidates = resp.json().get("vecHits", [])
-        top_ids = [m["id"] for m in sorted(candidates, key=lambda m: m["distance"])[:MAX_WORKING_SET]]
+        
+        # Apply recency boost to candidates
+        candidates_with_recency = []
+        current_time = datetime.now(timezone.utc)
+        
+        for hit in candidates:
+            try:
+                # Parse timestamp (handle different formats)
+                timestamp_str = hit.get('timestamp', '')
+                if timestamp_str:
+                    # Remove 'Z' and add timezone if needed
+                    if timestamp_str.endswith('Z'):
+                        timestamp_str = timestamp_str[:-1] + '+00:00'
+                    elif '+' not in timestamp_str and 'T' in timestamp_str:
+                        timestamp_str = timestamp_str + '+00:00'
+                    
+                    timestamp = datetime.fromisoformat(timestamp_str)
+                    days_ago = (current_time - timestamp).days
+                    
+                    # Recency boost: reduce distance for newer memories
+                    # Max boost of 0.2 for today, decreasing over time
+                    recency_boost = min(days_ago * 0.02, 0.2)  
+                    adjusted_distance = hit['distance'] - recency_boost
+                else:
+                    # No timestamp, no boost
+                    adjusted_distance = hit['distance']
+                
+                candidates_with_recency.append({
+                    **hit, 
+                    'adjusted_distance': adjusted_distance,
+                    'days_ago': days_ago if timestamp_str else 999
+                })
+                
+            except Exception as e:
+                # If timestamp parsing fails, use original distance
+                print(f"Error parsing timestamp for {hit.get('id', 'unknown')}: {e}")
+                candidates_with_recency.append({
+                    **hit, 
+                    'adjusted_distance': hit['distance'],
+                    'days_ago': 999
+                })
+        
+        # Sort by adjusted distance (recency-boosted)
+        top_candidates = sorted(candidates_with_recency, key=lambda m: m["adjusted_distance"])[:MAX_WORKING_SET]
+        top_ids = [m["id"] for m in top_candidates]
+        
         working_ids = update_working_set(thread_id, top_ids)
-
+        
         snippets = []
         for mid in working_ids:
             r = requests.get(
@@ -823,15 +869,24 @@ def chat_with_autopilot():
             ).json()
             if r:
                 snippets.append(r[0]["summary_snippet"])
-
-        # Back to simple GPT call
+        
+        # Call GPT with recency-boosted memories
         answer = call_nameless_api(snippets, user_msg)
-
+        
         return jsonify({
-            "message": answer,  # Changed from "response"
-            "memories_recalled": len(snippets)
+            "message": answer,
+            "memories_recalled": len(snippets),
+            "recency_boost_applied": True,
+            "debug_candidates": [
+                {
+                    "id": c["id"][:8], 
+                    "original_distance": c["distance"], 
+                    "adjusted_distance": c["adjusted_distance"],
+                    "days_ago": c["days_ago"]
+                } for c in top_candidates[:3]  # Show top 3 for debugging
+            ] if len(top_candidates) > 0 else []
         }), 200
-
+        
     except Exception as e:
         import traceback
         return jsonify({
