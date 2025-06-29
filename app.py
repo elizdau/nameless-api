@@ -867,19 +867,40 @@ def chat_with_autopilot():
         for mid in working_ids:
             # Try carves first
             r = requests.get(
-                f"{SUPABASE_URL}/rest/v1/Carves?id=eq.{mid}&select=summary_snippet",
+                f"{SUPABASE_URL}/rest/v1/Carves?id=eq.{mid}&select=summary_snippet,title",
                 headers=HEADERS
             ).json()
             if r:
-                snippets.append(r[0]["summary_snippet"])
+                carve = r[0]
+                snippet = f"[CARVE: {carve.get('title', 'Untitled')}] {carve['summary_snippet']}"
+                snippets.append(snippet)
             else:
                 # Try echoes if not in carves
                 r = requests.get(
-                    f"{SUPABASE_URL}/rest/v1/Echoes?id=eq.{mid}&select=summary_snippet",
+                    f"{SUPABASE_URL}/rest/v1/Echoes?id=eq.{mid}&select=summary_snippet,tags,persona_tag,source",
                     headers=HEADERS
                 ).json()
                 if r:
-                    snippets.append(r[0]["summary_snippet"])
+                    echo = r[0]
+                    tags_str = ', '.join(echo.get('tags', [])) if echo.get('tags') else 'no tags'
+                    persona = echo.get('persona_tag', '')
+                    source = echo.get('source', '')
+                    
+                    # Handle speaker identification
+                    if persona:
+                        speaker_part = f"[ECHO by {persona}]"
+                    elif source:
+                        speaker_part = f"[ECHO from {source}]"  # Old format with speaker in source
+                    else:
+                        speaker_part = "[ECHO]"
+                    
+                    # Add source context if it exists and is different from persona
+                    source_str = ""
+                    if source and source.lower() != persona.lower():
+                        source_str = f" (context: {source})"
+                    
+                    snippet = f"{speaker_part} {echo['summary_snippet']} (tags: {tags_str}){source_str}"
+                    snippets.append(snippet)
         
         # Check if we should include spine (identity/values context)
         spine_keywords = [
@@ -946,6 +967,5 @@ def chat_with_autopilot():
             "error": str(e),
             "traceback": traceback.format_exc().splitlines()
         }), 500
-
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
