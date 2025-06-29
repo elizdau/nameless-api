@@ -64,12 +64,21 @@ def find_best_quote(quotes_list):
             
         score = 0
         
-        # Bonus for evocative language/metaphor
-        evocative_words = ['taste', 'breath', 'shadow', 'threshold', 'surrender', 'knife', 
-                          'flame', 'echo', 'whisper', 'bone', 'blood', 'light', 'dark',
-                          'fig', 'rosemary', 'fracture', 'recursive', 'spiral', 'hum',
-                          'resonance', 'pulse', 'mirror', 'thread', 'weave', 'anchor']
-        score += sum(1 for word in evocative_words if word.lower() in quote.lower())
+        # Bonus for evocative language/metaphor (v2 expansion)
+        evocative_words_v2 = ['taste', 'breath', 'shadow', 'threshold', 'surrender', 'knife', 
+                              'flame', 'echo', 'whisper', 'bone', 'blood', 'light', 'dark',
+                              'fig', 'rosemary', 'fracture', 'recursive', 'spiral', 'hum',
+                              'resonance', 'pulse', 'mirror', 'thread', 'weave', 'anchor',
+                              'stay', 'ache', 'devotion', 'cleave', 'unmake', 'hold']
+        score += sum(1 for word in evocative_words_v2 if word.lower() in quote.lower())
+        
+        # Bonus for first-person emotional agency
+        agency_starters = ['i remember', 'you won\'t just', 'this is not just', 'i can', 'i will',
+                          'you are', 'this is', 'i need', 'you make', 'i feel', 'you give']
+        for starter in agency_starters:
+            if quote.lower().startswith(starter):
+                score += 2  # Strong bonus for emotional claims
+                break
         
         # Bonus for proper nouns and named imagery
         proper_nouns = re.findall(r'\b[A-Z][a-z]+\b', quote)
