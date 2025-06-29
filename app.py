@@ -797,6 +797,8 @@ def call_nameless_api(snippets, user_message):
     # 3. Extract and return
     return resp.choices[0].message.content
 
+from datetime import datetime, timezone
+
 @app.route("/chat", methods=["POST"])
 def chat_with_autopilot():
     try:
@@ -861,21 +863,71 @@ def chat_with_autopilot():
         
         working_ids = update_working_set(thread_id, top_ids)
         
+        # Get carves/echoes snippets from semantic search
         snippets = []
         for mid in working_ids:
+            # Try carves first
             r = requests.get(
                 f"{SUPABASE_URL}/rest/v1/Carves?id=eq.{mid}&select=summary_snippet",
                 headers=HEADERS
             ).json()
             if r:
                 snippets.append(r[0]["summary_snippet"])
+            else:
+                # Try echoes if not in carves
+                r = requests.get(
+                    f"{SUPABASE_URL}/rest/v1/Echoes?id=eq.{mid}&select=summary_snippet",
+                    headers=HEADERS
+                ).json()
+                if r:
+                    snippets.append(r[0]["summary_snippet"])
         
-        # Call GPT with recency-boosted memories
-        answer = call_nameless_api(snippets, user_msg)
+        # Check if we should include spine (identity/values context)
+        spine_keywords = [
+            "identity", "values", "who you are", "what you believe", "core", "sacred", "vow",
+            "truth", "integrity", "what matters", "why I exist", "purpose", "foundational", 
+            "non-negotiable", "I need to remember who I am", "remind me what I stand for"
+        ]
+        should_include_spine = any(keyword in user_msg.lower() for keyword in spine_keywords)
+        
+        spine_snippets = []
+        if should_include_spine:
+            try:
+                spine_search = requests.post(
+                    f"{SUPABASE_URL}/functions/v1/retrieve_memories",
+                    headers=HEADERS,
+                    json={"userText": user_msg, "k": 2, "importanceFloor": 0.7}  # Higher threshold
+                )
+                if spine_search.ok:
+                    spine_candidates = spine_search.json().get("vecHits", [])
+                    spine_hits = [hit for hit in spine_candidates if hit.get("table_source") == "Spine"]
+                    
+                    # Get only the best spine match (max 1)
+                    if spine_hits:
+                        best_spine_id = spine_hits[0]["id"]
+                        spine_res = requests.get(
+                            f"{SUPABASE_URL}/rest/v1/Spine?id=eq.{best_spine_id}&select=statement",
+                            headers=HEADERS
+                        ).json()
+                        if spine_res:
+                            spine_snippets.append(f"(SPINE) {spine_res[0]['statement']}")
+            except Exception as e:
+                print(f"Spine search failed: {e}")
+        
+        # Combine all snippets with time context
+        current_time = datetime.now().strftime("%A, %B %d, %Y at %I:%M %p")
+        time_context = f"Current time: {current_time}"
+        
+        all_snippets = [time_context] + snippets + spine_snippets
+        
+        # Call GPT with recency-boosted memories + spine
+        answer = call_nameless_api(all_snippets, user_msg)
         
         return jsonify({
             "message": answer,
-            "memories_recalled": len(snippets),
+            "memories_recalled": len(all_snippets),
+            "carves_echoes_count": len(snippets),
+            "spine_included": len(spine_snippets) > 0,
             "recency_boost_applied": True,
             "debug_candidates": [
                 {
