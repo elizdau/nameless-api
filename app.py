@@ -353,7 +353,6 @@ def search_carves_enhanced():
                             break  # Found a match, no need to continue
                 
                 if match_found:
-                if match_found:
                     literal_results.append({
                         "id": carve["id"],
                         "match_type": "literal",
