@@ -814,7 +814,7 @@ def chat_with_autopilot():
         answer = call_nameless_api(snippets, user_msg)
 
         return jsonify({
-            "response":           answer,
+            "message":           answer,
             "memories_recalled":  len(snippets)
         }), 200
 
