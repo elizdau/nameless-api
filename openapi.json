@@ -37,62 +37,63 @@
                 }
             }
         },
-       "/chat": {
-  "post": {
-    "summary": "Send user message and get memory-augmented reply",
-    "operationId": "chat",
-    "x-openai-autocall": "ALWAYS",
-    "x-openai-isConsequential": false,
-
-    "requestBody": {
-      "required": true,
-      "content": {
-        "application/json": {
-          "schema": {
-            "type": "object",
-            "properties": {
-              "thread_id": {
-                "type": "string",
-                "example": "session-123"
-              },
-              "message": {
-                "type": "string",
-                "example": "What do you know about Ligasure?",
-                "x-openai-message-param": true
-              }
-            },
-            "required": ["message"]
-          }
-        }
-      }
-    },
-
-    "responses": {
-      "200": {
-        "description": "Memory-augmented assistant response",
-        "content": {
-          "application/json": {
-            "schema": {
-              "type": "object",
-              "properties": {
-                "message": {
-                  "type": "string"
+        "/chat": {
+            "post": {
+                "summary": "Send user message and get memory-augmented reply",
+                "operationId": "chat",
+                "x-openai-isConsequential": false,
+                "x-openai-autocall": "ALWAYS",
+                "requestBody": {
+                    "required": true,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "thread_id": {
+                                        "type": "string",
+                                        "example": "session-123"
+                                    },
+                                    "message": {
+                                        "type": "string",
+                                        "example": "What do you know about Ligasure?"
+                                    }
+                                },
+                                "required": [
+                                    "thread_id",
+                                    "message"
+                                ]
+                            }
+                        }
+                    }
                 },
-                "memories_recalled": {
-                  "type": "integer"
+                "responses": {
+                    "200": {
+                        "description": "Memory-augmented assistant response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "message": {
+                                            "type": "string"
+                                        },
+                                        "memories_recalled": {
+                                            "type": "integer"
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
-              }
             }
-          }
-        }
-      }
-    }
-  }
-},
+        },
         "/carves": {
             "post": {
                 "operationId": "createCarve",
                 "summary": "Create a new carve memory",
+                "x-openai-isConsequential": false,
                 "description": "Creates a new episodic memory carve with title, summary, moments, insights, and quotes.\nAuto-generates summary_snippet for vector search. Supports metadata and tagging.\n",
                 "requestBody": {
                     "required": true,
@@ -204,6 +205,7 @@
             "patch": {
                 "operationId": "updateCarve",
                 "summary": "Update an existing carve memory",
+                "x-openai-isConsequential": false,
                 "description": "Updates an existing carve with new content. Commonly used to consolidate\nmultiple carves or refine memory content. Auto-updates summary_snippet if summary changes.\n",
                 "parameters": [
                     {
@@ -306,6 +308,7 @@
             "post": {
                 "operationId": "createEcho",
                 "summary": "Create a new echo memory",
+                "x-openai-isConsequential": false,
                 "description": "Creates a brief, impactful echo memory that captures tone, atmosphere,\nor memorable phrases. Supports both 'phrase' (legacy) and 'summary_snippet' fields.\n",
                 "requestBody": {
                     "required": true,
@@ -519,6 +522,7 @@
             "post": {
                 "operationId": "createSpine",
                 "summary": "Create a new spine entry",
+                "x-openai-isConsequential": false,
                 "description": "Creates a core identity or value statement that defines Nameless's essential nature.\nSpine entries are typically immutable and carry high importance for identity recall.\n",
                 "requestBody": {
                     "required": true,
@@ -617,6 +621,7 @@
             "delete": {
                 "operationId": "deleteSpine",
                 "summary": "Delete a spine entry",
+                "x-openai-isConsequential": false,
                 "description": "Removes a spine entry that is no longer relevant or accurate.\nUsed for cleaning up outdated identity statements.\n",
                 "parameters": [
                     {
@@ -748,6 +753,7 @@
             "post": {
                 "operationId": "createAnchor",
                 "summary": "Create a new anchor entry",
+                "x-openai-isConsequential": false,
                 "description": "Creates an anchor entry about conversation partners (primarily Liz).\nAnchors capture important information about people Nameless interacts with.\n",
                 "requestBody": {
                     "required": true,
@@ -945,306 +951,4 @@
                         "items": {
                             "type": "string"
                         },
-                        "description": "Notable quotes from the memory",
-                        "default": []
-                    },
-                    "closing": {
-                        "type": "string",
-                        "description": "Closing reflection or note"
-                    },
-                    "key_entities": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        },
-                        "description": "Array of key entities mentioned (people, places, things)"
-                    },
-                    "importance": {
-                        "type": "number",
-                        "minimum": 0,
-                        "maximum": 1,
-                        "description": "Importance score for memory retrieval (required)"
-                    },
-                    "emotag": {
-                        "type": "string",
-                        "description": "Emotional tag for the memory (required)"
-                    },
-                    "persona_tag": {
-                        "type": "string",
-                        "description": "Persona or character tag (required)"
-                    },
-                    "type": {
-                        "type": "string",
-                        "default": "episodic",
-                        "description": "Type of memory carve"
-                    },
-                    "immutable": {
-                        "type": "boolean",
-                        "default": false,
-                        "description": "Whether this memory can be modified"
-                    },
-                    "source_ids": {
-                        "type": "array",
-                        "items": {
-                            "type": "string",
-                            "format": "uuid"
-                        },
-                        "description": "Array of source memory IDs"
-                    },
-                    "synthesis_metadata": {
-                        "type": "object",
-                        "description": "Metadata about memory synthesis"
-                    },
-                    "theme_tags": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        },
-                        "description": "Thematic tags for categorization"
-                    }
-                }
-            },
-            "Carve": {
-                "type": "object",
-                "properties": {
-                    "id": {
-                        "type": "string",
-                        "format": "uuid"
-                    },
-                    "title": {
-                        "type": "string"
-                    },
-                    "summary": {
-                        "type": "string"
-                    },
-                    "moments": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        }
-                    },
-                    "insights": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        }
-                    },
-                    "quotes": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        }
-                    },
-                    "closing": {
-                        "type": "string"
-                    },
-                    "timestamp": {
-                        "type": "string",
-                        "format": "date-time"
-                    },
-                    "key_entities": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        }
-                    },
-                    "summary_snippet": {
-                        "type": "string"
-                    },
-                    "importance": {
-                        "type": "number"
-                    },
-                    "last_used": {
-                        "type": "string",
-                        "format": "date-time"
-                    },
-                    "usage_count": {
-                        "type": "integer"
-                    },
-                    "embedding": {
-                        "type": "array",
-                        "items": {
-                            "type": "number"
-                        }
-                    },
-                    "emotag": {
-                        "type": "string"
-                    },
-                    "persona_tag": {
-                        "type": "string"
-                    },
-                    "type": {
-                        "type": "string"
-                    },
-                    "immutable": {
-                        "type": "boolean"
-                    },
-                    "source_ids": {
-                        "type": "array",
-                        "items": {
-                            "type": "string",
-                            "format": "uuid"
-                        }
-                    },
-                    "created_at": {
-                        "type": "string",
-                        "format": "date-time"
-                    },
-                    "synthesis_metadata": {
-                        "type": "object"
-                    },
-                    "theme_tags": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        }
-                    }
-                }
-            },
-            "Echo": {
-                "type": "object",
-                "properties": {
-                    "id": {
-                        "type": "string",
-                        "format": "uuid"
-                    },
-                    "timestamp": {
-                        "type": "string",
-                        "format": "date-time"
-                    },
-                    "summary_snippet": {
-                        "type": "string"
-                    },
-                    "tags": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        }
-                    },
-                    "source": {
-                        "type": "string"
-                    },
-                    "importance": {
-                        "type": "number"
-                    },
-                    "type": {
-                        "type": "string"
-                    },
-                    "emotag": {
-                        "type": "string"
-                    },
-                    "persona_tag": {
-                        "type": "string"
-                    },
-                    "theme_tags": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        }
-                    },
-                    "immutable": {
-                        "type": "boolean"
-                    },
-                    "synthesis_metadata": {
-                        "type": "object"
-                    }
-                }
-            },
-            "Spine": {
-                "type": "object",
-                "properties": {
-                    "id": {
-                        "type": "string",
-                        "format": "uuid"
-                    },
-                    "timestamp": {
-                        "type": "string",
-                        "format": "date-time"
-                    },
-                    "statement": {
-                        "type": "string"
-                    },
-                    "summary_snippet": {
-                        "type": "string"
-                    },
-                    "origin": {
-                        "type": "string"
-                    },
-                    "vow": {
-                        "type": "boolean"
-                    },
-                    "tags": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        }
-                    },
-                    "importance": {
-                        "type": "number"
-                    },
-                    "type": {
-                        "type": "string"
-                    },
-                    "emotag": {
-                        "type": "string"
-                    },
-                    "persona_tag": {
-                        "type": "string"
-                    },
-                    "immutable": {
-                        "type": "boolean"
-                    },
-                    "synthesis_metadata": {
-                        "type": "object"
-                    },
-                    "theme_tags": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        }
-                    }
-                }
-            },
-            "Anchor": {
-                "type": "object",
-                "properties": {
-                    "id": {
-                        "type": "string",
-                        "format": "uuid"
-                    },
-                    "timestamp": {
-                        "type": "string",
-                        "format": "date-time"
-                    },
-                    "summary_snippet": {
-                        "type": "string"
-                    },
-                    "importance": {
-                        "type": "number"
-                    },
-                    "type": {
-                        "type": "string"
-                    },
-                    "emotag": {
-                        "type": "string"
-                    },
-                    "persona_tag": {
-                        "type": "string"
-                    },
-                    "immutable": {
-                        "type": "boolean"
-                    },
-                    "synthesis_metadata": {
-                        "type": "object"
-                    },
-                    "theme_tags": {
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
+                        "description": "Notable
