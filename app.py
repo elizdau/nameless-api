@@ -651,46 +651,60 @@ def search_spine():
 
 @app.route("/anchor", methods=["POST"])
 def create_anchor():
-    """
-    Create a new anchor entry about conversation partners (primarily Liz).
-    Anchors capture important information about people Nameless interacts with.
-    """
     try:
+        print("=== ANCHOR DEBUG START ===")
         data = request.get_json()
+        print(f"Received data: {data}")
         
         # Required field validation
         summary_snippet = data.get("summary_snippet")
         if not summary_snippet:
-            return jsonify({"error": "summary_snippet is required"}), 400
+            print("Missing summary_snippet!")
+            return jsonify({
+                "error": "summary_snippet is required",
+                "received": data
+            }), 400
         
         # Build anchor payload
         anchor_data = {
             "summary_snippet": summary_snippet,
-            "importance": data.get("importance", 0.9),  # High default importance
+            "importance": data.get("importance", 0.9),
             "type": data.get("type", "profile"),
             "emotag": data.get("emotag"),
-            "persona_tag": data.get("persona_tag", "Liz"),  # Default to Liz
-            "immutable": data.get("immutable", True),  # Default immutable
+            "persona_tag": data.get("persona_tag", "Liz"),
+            "immutable": data.get("immutable", True),
             "synthesis_metadata": data.get("synthesis_metadata"),
             "theme_tags": data.get("theme_tags")
         }
         
-        # Create anchor entry in Supabase (trigger will handle enrichment)
+        print(f"Sending to Supabase: {anchor_data}")
+        
+        # Create anchor entry in Supabase
         response = requests.post(
             f"{SUPABASE_URL}/rest/v1/Anchor",
             headers=HEADERS,
             json=anchor_data
         )
         
+        print(f"Supabase status: {response.status_code}")
+        print(f"Supabase response: {response.text}")
+        
         if response.ok:
-            return jsonify(response.json()[0]), 201
+            result = response.json()
+            print(f"Success! Created: {result}")
+            return jsonify(result[0]), 201
         else:
+            print(f"Supabase error: {response.text}")
             return jsonify({
                 "error": "Failed to create anchor entry",
-                "details": response.text
+                "supabase_error": response.text,
+                "status_code": response.status_code
             }), 500
             
     except Exception as e:
+        print(f"Python exception: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             "error": "Failed to create anchor entry", 
             "details": str(e)
