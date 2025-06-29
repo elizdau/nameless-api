@@ -353,6 +353,179 @@ def search_carves():
             "details": str(e)
         }), 500
 
+@app.route("/carves/search-enhanced", methods=["GET"])
+def search_carves_enhanced():
+    """
+    Enhanced hybrid search: Semantic + Literal text matching
+    Searches across all carve content, not just summary_snippet
+    """
+    query = request.args.get("query")
+    limit = int(request.args.get("limit", 10))
+    importance_floor = float(request.args.get("importance_floor", 0.4))
+    
+    if not query:
+        return jsonify({"error": "Query parameter required"}), 400
+    
+    # Cap the limit to prevent overload
+    limit = min(limit, 20)
+    
+    try:
+        # STEP 1: Semantic search (existing)
+        search_response = requests.post(
+            f"{SUPABASE_URL}/functions/v1/retrieve_memories",
+            headers=HEADERS,
+            json={
+                "userText": query,
+                "k": limit * 2,  # Get more candidates for filtering
+                "importanceFloor": importance_floor
+            }
+        )
+        
+        semantic_results = []
+        if search_response.ok:
+            results = search_response.json()
+            carve_hits = results.get("vecHits", [])
+            semantic_results = [hit for hit in carve_hits if hit.get("table_source") == "Carves"]
+        
+        # STEP 2: Literal text search across all carve content
+        literal_results = []
+        
+        # Search all carves for literal text matches
+        all_carves_response = requests.get(
+            f"{SUPABASE_URL}/rest/v1/Carves?select=id,title,summary,quotes,moments,insights,closing,importance,timestamp,emotag&importance=gte.{importance_floor}",
+            headers=HEADERS
+        )
+        
+        if all_carves_response.ok:
+            all_carves = all_carves_response.json()
+            
+            for carve in all_carves:
+                # Check if query appears in ANY content section
+                searchable_content = [
+                    carve.get('title', ''),
+                    carve.get('summary', ''),
+                    carve.get('closing', ''),
+                ]
+                
+                # Add quotes, moments, insights if they exist
+                try:
+                    if carve.get('quotes'):
+                        quotes = json.loads(carve['quotes']) if carve['quotes'].startswith('[') else []
+                        searchable_content.extend(quotes)
+                except:
+                    pass
+                    
+                try:
+                    if carve.get('moments'):
+                        moments = json.loads(carve['moments']) if carve['moments'].startswith('[') else []
+                        searchable_content.extend(moments)
+                except:
+                    pass
+                    
+                try:
+                    if carve.get('insights'):
+                        insights = json.loads(carve['insights']) if carve['insights'].startswith('[') else []
+                        searchable_content.extend(insights)
+                except:
+                    pass
+                
+                # Check for literal matches (case insensitive)
+                query_lower = query.lower()
+                for content in searchable_content:
+                    if content and query_lower in content.lower():
+                        literal_results.append({
+                            "id": carve["id"],
+                            "match_type": "literal",
+                            "match_content": content[:200] + "..." if len(content) > 200 else content,
+                            "distance": 0.0,  # Perfect match for literal
+                            "carve": carve
+                        })
+                        break  # Only count each carve once
+        
+        # STEP 3: Combine and deduplicate results
+        combined_results = {}
+        
+        # Add semantic results
+        for hit in semantic_results:
+            carve_id = hit["id"]
+            if carve_id not in combined_results:
+                combined_results[carve_id] = {
+                    "id": carve_id,
+                    "distance": hit["distance"],
+                    "match_types": ["semantic"],
+                    "match_content": hit.get("summary_snippet", "")
+                }
+            else:
+                combined_results[carve_id]["match_types"].append("semantic")
+        
+        # Add literal results (prioritize these)
+        for result in literal_results:
+            carve_id = result["id"]
+            if carve_id not in combined_results:
+                combined_results[carve_id] = {
+                    "id": carve_id,
+                    "distance": 0.0,  # Literal matches get perfect score
+                    "match_types": ["literal"],
+                    "match_content": result["match_content"],
+                    "carve": result["carve"]
+                }
+            else:
+                # Upgrade existing result with literal match
+                combined_results[carve_id]["distance"] = 0.0  # Literal wins
+                combined_results[carve_id]["match_types"].append("literal")
+                combined_results[carve_id]["match_content"] = result["match_content"]
+        
+        # STEP 4: Get full carve details and sort results
+        final_results = []
+        
+        for result in list(combined_results.values())[:limit]:
+            if "carve" in result:
+                # Already have full carve data
+                carve = result["carve"]
+            else:
+                # Fetch full carve data
+                carve_res = requests.get(
+                    f"{SUPABASE_URL}/rest/v1/Carves?id=eq.{result['id']}&select=id,title,timestamp,summary,moments,insights,quotes,closing,importance,emotag",
+                    headers=HEADERS
+                )
+                if carve_res.ok and carve_res.json():
+                    carve = carve_res.json()[0]
+                else:
+                    continue
+            
+            # Add search metadata
+            carve["search_distance"] = result["distance"]
+            carve["match_types"] = result["match_types"]
+            carve["match_content"] = result["match_content"]
+            
+            final_results.append(carve)
+        
+        # Sort: literal matches first, then by distance
+        final_results.sort(key=lambda x: (
+            0 if "literal" in x["match_types"] else 1,  # Literal first
+            x["search_distance"]  # Then by distance
+        ))
+        
+        return jsonify({
+            "carves": final_results[:limit],
+            "total_found": len(combined_results),
+            "returned": len(final_results),
+            "search_methods": {
+                "semantic_matches": len([r for r in combined_results.values() if "semantic" in r["match_types"]]),
+                "literal_matches": len([r for r in combined_results.values() if "literal" in r["match_types"]]),
+                "hybrid_matches": len([r for r in combined_results.values() if len(r["match_types"]) > 1])
+            },
+            "message": f"Hybrid search: semantic + literal text matching across all carve content"
+        }), 200
+        
+    except Exception as e:
+        import traceback
+        return jsonify({
+            "error": "Hybrid search failed", 
+            "details": str(e),
+            "traceback": traceback.format_exc().splitlines()
+        }), 500
+
 @app.route("/echoes", methods=["POST"])
 def create_echo():
     """
