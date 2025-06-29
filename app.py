@@ -804,10 +804,10 @@ def chat_with_autopilot():
         data = request.get_json()
         user_msg = data.get("message", "")
         thread_id = data.get("thread_id", "default")
-        
+
         init_thread(thread_id)
         triggered_f = cue_scan(user_msg, conversation_cache[thread_id])
-        
+
         resp = requests.post(
             f"{SUPABASE_URL}/functions/v1/retrieve_memories",
             headers=HEADERS,
@@ -929,6 +929,7 @@ def chat_with_autopilot():
             "carves_echoes_count": len(snippets),
             "spine_included": len(spine_snippets) > 0,
             "recency_boost_applied": True,
+            "memory_snippets": all_snippets,  # THE MISSING PIECE!
             "debug_candidates": [
                 {
                     "id": c["id"][:8], 
