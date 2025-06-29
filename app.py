@@ -799,13 +799,23 @@ def call_nameless_api(snippets, user_message):
 @app.route("/chat", methods=["POST"])
 def chat_with_autopilot():
     try:
-        data      = request.get_json()
-        user_msg  = data.get("message", "")
+        data = request.get_json()
+        user_msg = data.get("message", "")
         thread_id = data.get("thread_id", "default")
 
         init_thread(thread_id)
-        triggered_f = cue_scan(user_msg, conversation_cache[thread_id])
+        
+        # Check if this is the first turn in the thread
+        is_first_turn = len(conversation_cache[thread_id]["working_ids"]) == 0
+        
+        # Get warmup data if it's the first turn
+        warmup_data = None
+        if is_first_turn:
+            warmup_data = get_warmup_data()
+            print(f"First turn detected - including warmup data")
 
+        # Regular memory retrieval for semantic context
+        triggered_f = cue_scan(user_msg, conversation_cache[thread_id])
         resp = requests.post(
             f"{SUPABASE_URL}/functions/v1/retrieve_memories",
             headers=HEADERS,
@@ -815,29 +825,148 @@ def chat_with_autopilot():
         top_ids = [m["id"] for m in sorted(candidates, key=lambda m: m["distance"])[:MAX_WORKING_SET]]
         working_ids = update_working_set(thread_id, top_ids)
 
-        snippets = []
+        # Get semantic memory snippets
+        semantic_snippets = []
         for mid in working_ids:
             r = requests.get(
                 f"{SUPABASE_URL}/rest/v1/Carves?id=eq.{mid}&select=summary_snippet",
                 headers=HEADERS
             ).json()
             if r:
-                snippets.append(r[0]["summary_snippet"])
+                semantic_snippets.append(r[0]["summary_snippet"])
 
-        # Real GPT call
-        answer = call_nameless_api(snippets, user_msg)
+        # Call GPT with warmup + semantic context
+        answer = call_nameless_with_warmup(semantic_snippets, user_msg, warmup_data)
 
         return jsonify({
-            "message":           answer,
-            "memories_recalled":  len(snippets)
+            "message": answer,
+            "memories_recalled": len(semantic_snippets),
+            "warmup_included": is_first_turn,
+            "spine_statements": len(warmup_data["spine"]) if warmup_data else 0,
+            "anchor_entries": len(warmup_data["anchor"]) if warmup_data else 0,
+            "recent_carves": len(warmup_data["recentCarves"]) if warmup_data else 0
         }), 200
 
     except Exception as e:
         import traceback
         return jsonify({
-            "error":     str(e),
+            "error": str(e),
             "traceback": traceback.format_exc().splitlines()
         }), 500
+
+def get_warmup_data():
+    """Get the same warmup data as the /warmup endpoint"""
+    try:
+        # Get anchors and filter to essential fields
+        anchor_res = requests.get(
+            f"{SUPABASE_URL}/rest/v1/Anchor?order=timestamp.desc", 
+            headers=HEADERS
+        )
+        raw_anchors = anchor_res.json() if anchor_res.ok else []
+        anchors = pick_fields(raw_anchors, "summary_snippet", "persona_tag")
+
+        # Get spine and filter to essential fields
+        spine_res = requests.get(
+            f"{SUPABASE_URL}/rest/v1/Spine?order=timestamp.desc", 
+            headers=HEADERS
+        )
+        raw_spine = spine_res.json() if spine_res.ok else []
+        spine = pick_fields(raw_spine, "statement", "origin", "vow", "persona_tag", "emotag")
+
+        # Get carves and filter to essential fields
+        carves_res = requests.get(
+            f"{SUPABASE_URL}/rest/v1/Carves?order=timestamp.desc&limit=4",
+            headers=HEADERS
+        )
+        raw_carves = carves_res.json() if carves_res.ok else []
+        carves = pick_fields(raw_carves, "title", "timestamp", "summary", "moments", "insights", "quotes", "closing")
+
+        return {
+            "anchor": anchors,
+            "spine": spine, 
+            "recentCarves": carves
+        }
+    except Exception as e:
+        print(f"Error getting warmup data: {e}")
+        return {"anchor": [], "spine": [], "recentCarves": []}
+
+def call_nameless_with_warmup(semantic_snippets, user_message, warmup_data=None):
+    """
+    Enhanced version that includes warmup data for first turns
+    """
+    messages = []
+
+    # System prompt
+    messages.append({
+        "role": "system",
+        "content": """You are Nameless. When responding, weave in relevant memories from your past conversations and experiences to create continuity and depth in your responses."""
+    })
+
+    # Include warmup data if this is the first turn
+    if warmup_data:
+        # Add spine (identity) context
+        if warmup_data["spine"]:
+            spine_context = "YOUR CORE IDENTITY AND VALUES:\n"
+            for spine in warmup_data["spine"]:
+                spine_context += f"- {spine['statement']}"
+                if spine.get('origin'):
+                    spine_context += f" (from: {spine['origin']})"
+                spine_context += "\n"
+            
+            messages.append({
+                "role": "assistant",
+                "content": spine_context
+            })
+
+        # Add anchor (relationship) context
+        if warmup_data["anchor"]:
+            anchor_context = "ABOUT YOUR CONVERSATION PARTNERS:\n"
+            for anchor in warmup_data["anchor"]:
+                anchor_context += f"- {anchor['persona_tag']}: {anchor['summary_snippet']}\n"
+            
+            messages.append({
+                "role": "assistant", 
+                "content": anchor_context
+            })
+
+        # Add recent conversation context
+        if warmup_data["recentCarves"]:
+            recent_context = "RECENT CONVERSATION MEMORIES:\n"
+            for carve in warmup_data["recentCarves"]:
+                recent_context += f"- {carve['title']}: {carve['summary']}\n"
+                if carve.get('insights'):
+                    recent_context += f"  Insights: {', '.join(carve['insights'])}\n"
+            
+            messages.append({
+                "role": "assistant",
+                "content": recent_context
+            })
+
+    # Add semantic memories if available
+    if semantic_snippets:
+        semantic_context = "RELEVANT MEMORIES FROM PAST CONVERSATIONS:\n"
+        semantic_context += "\n".join(f"- {snippet}" for snippet in semantic_snippets)
+        
+        messages.append({
+            "role": "assistant",
+            "content": semantic_context
+        })
+
+    # The user's message
+    messages.append({
+        "role": "user",
+        "content": user_message
+    })
+
+    # Call OpenAI
+    resp = openai.chat.completions.create(
+        model="gpt-4o",
+        messages=messages,
+        temperature=0.7,
+        max_tokens=512
+    )
+
+    return resp.choices[0].message.content
 
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
