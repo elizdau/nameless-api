@@ -867,20 +867,36 @@ def chat_with_autopilot():
         for mid in working_ids:
             # Try carves first
             r = requests.get(
-                f"{SUPABASE_URL}/rest/v1/Carves?id=eq.{mid}&select=summary_snippet",
+                f"{SUPABASE_URL}/rest/v1/Carves?id=eq.{mid}&select=summary_snippet,title",
                 headers=HEADERS
             ).json()
             if r:
-                snippet = f"[CARVE] {r[0]['summary_snippet']}"
+                carve = r[0]
+                snippet = f"[CARVE: {carve.get('title', 'Untitled')}] {carve['summary_snippet']}"
                 snippets.append(snippet)
             else:
                 # Try echoes if not in carves
                 r = requests.get(
-                    f"{SUPABASE_URL}/rest/v1/Echoes?id=eq.{mid}&select=summary_snippet",
+                    f"{SUPABASE_URL}/rest/v1/Echoes?id=eq.{mid}&select=summary_snippet,tags,persona_tag,source",
                     headers=HEADERS
                 ).json()
                 if r:
-                    snippet = f"[ECHO] {r[0]['summary_snippet']}"
+                    echo = r[0]
+                    tags_str = ', '.join(echo.get('tags', [])) if echo.get('tags') else 'no tags'
+                    persona = echo.get('persona_tag', '')
+                    source = echo.get('source', '')
+                    
+                    # Build echo snippet with available info
+                    if persona:
+                        snippet = f"[ECHO by {persona}] {echo['summary_snippet']}"
+                    else:
+                        snippet = f"[ECHO] {echo['summary_snippet']}"
+                    
+                    # Add tags and source context
+                    snippet += f" (tags: {tags_str})"
+                    if source:
+                        snippet += f" (context: {source})"
+                    
                     snippets.append(snippet)
         
         # Check if we should include spine (identity/values context)
