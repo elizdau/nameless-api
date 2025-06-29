@@ -249,12 +249,12 @@ def create_carve():
             "details": str(e)
         }), 500
 
+# Add these to your app.py to restore the missing endpoints
 
 @app.route("/carves/search", methods=["GET"])
 def search_carves():
     """
-    Enhanced hybrid search: Semantic + Literal text matching with word boundaries
-    Searches across all carve content, not just summary_snippet
+    Hybrid search: Semantic + Literal text matching with word boundaries
     """
     query = request.args.get("query")
     limit = int(request.args.get("limit", 10))
@@ -263,17 +263,16 @@ def search_carves():
     if not query:
         return jsonify({"error": "Query parameter required"}), 400
     
-    # Cap the limit to prevent overload
     limit = min(limit, 20)
     
     try:
-        # STEP 1: Semantic search (existing)
+        # STEP 1: Semantic search
         search_response = requests.post(
             f"{SUPABASE_URL}/functions/v1/retrieve_memories",
             headers=HEADERS,
             json={
                 "userText": query,
-                "k": limit * 2,  # Get more candidates for filtering
+                "k": limit * 2,
                 "importanceFloor": importance_floor
             }
         )
@@ -284,10 +283,8 @@ def search_carves():
             carve_hits = results.get("vecHits", [])
             semantic_results = [hit for hit in carve_hits if hit.get("table_source") == "Carves"]
         
-        # STEP 2: Literal text search across all carve content
+        # STEP 2: Literal text search
         literal_results = []
-        
-        # Search all carves for literal text matches
         all_carves_response = requests.get(
             f"{SUPABASE_URL}/rest/v1/Carves?select=id,title,summary,quotes,moments,insights,closing,importance,timestamp,emotag&importance=gte.{importance_floor}",
             headers=HEADERS
@@ -297,87 +294,67 @@ def search_carves():
             all_carves = all_carves_response.json()
             
             for carve in all_carves:
-                # Check if query appears in ANY content section
                 searchable_content = []
                 
                 # Add basic fields
-                basic_fields = ['title', 'summary', 'closing']
-                for field in basic_fields:
+                for field in ['title', 'summary', 'closing']:
                     content = carve.get(field, '')
                     if content:
                         searchable_content.append(content)
                 
-                # Parse and add JSON arrays more carefully
-                json_fields = ['quotes', 'moments', 'insights']
-                for field in json_fields:
+                # Parse JSON arrays
+                import json
+                for field in ['quotes', 'moments', 'insights']:
                     field_content = carve.get(field)
                     if field_content:
                         try:
-                            # Handle both string and already-parsed arrays
-                            if isinstance(field_content, str):
-                                if field_content.startswith('['):
-                                    parsed_array = json.loads(field_content)
-                                else:
-                                    # Single string, treat as array of one
-                                    parsed_array = [field_content]
+                            if isinstance(field_content, str) and field_content.startswith('['):
+                                parsed_array = json.loads(field_content)
+                                for item in parsed_array:
+                                    if item and isinstance(item, str):
+                                        searchable_content.append(item)
                             elif isinstance(field_content, list):
-                                parsed_array = field_content
-                            else:
-                                continue
-                                
-                            # Add each item in the array to searchable content
-                            for item in parsed_array:
-                                if item and isinstance(item, str):
-                                    searchable_content.append(item)
-                                    
-                        except (json.JSONDecodeError, TypeError) as e:
-                            # If JSON parsing fails, try to search the raw string
+                                for item in field_content:
+                                    if item and isinstance(item, str):
+                                        searchable_content.append(item)
+                        except:
                             if isinstance(field_content, str):
                                 searchable_content.append(field_content)
                 
-                # Check for literal matches with word boundary prioritization
+                # Check for matches with word boundary prioritization
                 import re
                 query_lower = query.lower().strip()
                 match_found = False
                 match_content = ""
-                match_score = 0  # Higher score = better match
+                match_score = 0
                 
                 for content in searchable_content:
                     if content and isinstance(content, str):
                         content_lower = content.lower()
                         
-                        # Check for exact word match first (highest priority)
+                        # Exact word match (highest priority)
                         if re.search(r'\b' + re.escape(query_lower) + r'\b', content_lower):
                             match_found = True
-                            match_score = 100  # Highest score for exact word match
-                            if len(content) > 200:
-                                match_content = content[:200] + "..."
-                            else:
-                                match_content = content
-                            break  # Perfect match found, stop looking
+                            match_score = 100
+                            match_content = content[:200] + "..." if len(content) > 200 else content
+                            break
                         
-                        # Check for substring match (lower priority)
+                        # Substring match (lower priority)
                         elif query_lower in content_lower and match_score < 50:
                             match_found = True
-                            match_score = 50  # Lower score for substring match
-                            if len(content) > 200:
-                                match_content = content[:200] + "..."
-                            else:
-                                match_content = content
-                            # Don't break - keep looking for exact word match
+                            match_score = 50
+                            match_content = content[:200] + "..." if len(content) > 200 else content
                 
-                if match_found:
                 if match_found:
                     literal_results.append({
                         "id": carve["id"],
                         "match_type": "literal",
                         "match_content": match_content,
-                        "distance": (100 - match_score) / 100.0,  # Convert score to distance (lower = better)
-                        "match_score": match_score,  # For debugging
+                        "distance": (100 - match_score) / 100.0,
                         "carve": carve
                     })
         
-        # STEP 3: Combine and deduplicate results
+        # STEP 3: Combine results
         combined_results = {}
         
         # Add semantic results
@@ -390,8 +367,6 @@ def search_carves():
                     "match_types": ["semantic"],
                     "match_content": hit.get("summary_snippet", "")
                 }
-            else:
-                combined_results[carve_id]["match_types"].append("semantic")
         
         # Add literal results (prioritize these)
         for result in literal_results:
@@ -399,26 +374,23 @@ def search_carves():
             if carve_id not in combined_results:
                 combined_results[carve_id] = {
                     "id": carve_id,
-                    "distance": 0.0,  # Literal matches get perfect score
+                    "distance": result["distance"],
                     "match_types": ["literal"],
                     "match_content": result["match_content"],
                     "carve": result["carve"]
                 }
             else:
-                # Upgrade existing result with literal match
-                combined_results[carve_id]["distance"] = 0.0  # Literal wins
+                # Upgrade existing result
+                combined_results[carve_id]["distance"] = min(combined_results[carve_id]["distance"], result["distance"])
                 combined_results[carve_id]["match_types"].append("literal")
                 combined_results[carve_id]["match_content"] = result["match_content"]
         
-        # STEP 4: Get full carve details and sort results
+        # STEP 4: Get full carve details and sort
         final_results = []
-        
         for result in list(combined_results.values())[:limit]:
             if "carve" in result:
-                # Already have full carve data
                 carve = result["carve"]
             else:
-                # Fetch full carve data
                 carve_res = requests.get(
                     f"{SUPABASE_URL}/rest/v1/Carves?id=eq.{result['id']}&select=id,title,timestamp,summary,moments,insights,quotes,closing,importance,emotag",
                     headers=HEADERS
@@ -428,37 +400,87 @@ def search_carves():
                 else:
                     continue
             
-            # Add search metadata
             carve["search_distance"] = result["distance"]
             carve["match_types"] = result["match_types"]
             carve["match_content"] = result["match_content"]
-            
             final_results.append(carve)
         
-        # Sort: literal matches first, then by distance
+        # Sort: literal first, then by distance
         final_results.sort(key=lambda x: (
-            0 if "literal" in x["match_types"] else 1,  # Literal first
-            x["search_distance"]  # Then by distance
+            0 if "literal" in x["match_types"] else 1,
+            x["search_distance"]
         ))
         
         return jsonify({
             "carves": final_results[:limit],
             "total_found": len(combined_results),
             "returned": len(final_results),
-            "search_methods": {
-                "semantic_matches": len([r for r in combined_results.values() if "semantic" in r["match_types"]]),
-                "literal_matches": len([r for r in combined_results.values() if "literal" in r["match_types"]]),
-                "hybrid_matches": len([r for r in combined_results.values() if len(r["match_types"]) > 1])
-            },
-            "message": f"Hybrid search: semantic + literal text matching across all carve content"
+            "message": f"Found {len(combined_results)} matches, returning {len(final_results)} carves"
         }), 200
         
     except Exception as e:
         import traceback
         return jsonify({
-            "error": "Hybrid search failed", 
+            "error": "Search failed", 
             "details": str(e),
             "traceback": traceback.format_exc().splitlines()
+        }), 500
+
+
+@app.route("/carves/<carve_id>", methods=["PATCH"])
+def update_carve(carve_id):
+    """
+    Update an existing carve memory
+    """
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({"error": "No update data provided"}), 400
+        
+        # If summary is being updated, regenerate summary_snippet with better algorithm
+        if "summary" in data:
+            # Use the improved snippet generation if available
+            try:
+                from update_snippets import generate_better_snippet
+                # Get the current carve data
+                current_carve = requests.get(
+                    f"{SUPABASE_URL}/rest/v1/Carves?id=eq.{carve_id}&select=*",
+                    headers=HEADERS
+                ).json()
+                
+                if current_carve:
+                    # Merge current data with updates
+                    updated_carve_data = {**current_carve[0], **data}
+                    data["summary_snippet"] = generate_better_snippet(updated_carve_data)
+            except:
+                # Fallback to simple snippet generation
+                summary = data["summary"]
+                data["summary_snippet"] = summary[:200] + "..." if len(summary) > 200 else summary
+        
+        # Update the carve in Supabase
+        response = requests.patch(
+            f"{SUPABASE_URL}/rest/v1/Carves?id=eq.{carve_id}",
+            headers=HEADERS,
+            json=data
+        )
+        
+        if response.ok:
+            updated_carve = response.json()
+            if updated_carve:
+                return jsonify(updated_carve[0]), 200
+            else:
+                return jsonify({"error": "Carve not found"}), 404
+        else:
+            return jsonify({
+                "error": "Failed to update carve",
+                "details": response.text
+            }), 500
+            
+    except Exception as e:
+        return jsonify({
+            "error": "Failed to update carve", 
+            "details": str(e)
         }), 500
 
 @app.route("/echoes", methods=["POST"])
