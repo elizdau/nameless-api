@@ -5,6 +5,7 @@ from datetime import datetime
 import uuid
 import openai
 from datetime import datetime, timezone
+import pytz
 
 # your Supabase config…
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
@@ -797,8 +798,6 @@ def call_nameless_api(snippets, user_message):
     # 3. Extract and return
     return resp.choices[0].message.content
 
-from datetime import datetime, timezone
-
 @app.route("/chat", methods=["POST"])
 def chat_with_autopilot():
     try:
@@ -914,8 +913,9 @@ def chat_with_autopilot():
             except Exception as e:
                 print(f"Spine search failed: {e}")
         
-        # Combine all snippets with time context
-        current_time = datetime.now().strftime("%A, %B %d, %Y at %I:%M %p")
+        # Combine all snippets with time context (Central Time)
+        central_tz = pytz.timezone('US/Central')
+        current_time = datetime.now(central_tz).strftime("%A, %B %d, %Y at %I:%M %p %Z")
         time_context = f"Current time: {current_time}"
         
         all_snippets = [time_context] + snippets + spine_snippets
