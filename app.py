@@ -25,8 +25,8 @@ from collections import deque
 import re
 
 # — Thread-local working-set cache settings —
-MAX_WORKING_SET = 8
-MAX_AGE         = 4
+MAX_WORKING_SET = 5
+MAX_AGE         = 2
 conversation_cache = {}   # { thread_id: { "working_ids": deque, "turns_since_use": {} } }
 
 # Pre-compile your cue rules (you can load more from the DB later)
