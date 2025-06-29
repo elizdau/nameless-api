@@ -401,46 +401,69 @@ def search_carves_enhanced():
             
             for carve in all_carves:
                 # Check if query appears in ANY content section
-                searchable_content = [
-                    carve.get('title', ''),
-                    carve.get('summary', ''),
-                    carve.get('closing', ''),
-                ]
+                searchable_content = []
                 
-                # Add quotes, moments, insights if they exist
-                try:
-                    if carve.get('quotes'):
-                        quotes = json.loads(carve['quotes']) if carve['quotes'].startswith('[') else []
-                        searchable_content.extend(quotes)
-                except:
-                    pass
-                    
-                try:
-                    if carve.get('moments'):
-                        moments = json.loads(carve['moments']) if carve['moments'].startswith('[') else []
-                        searchable_content.extend(moments)
-                except:
-                    pass
-                    
-                try:
-                    if carve.get('insights'):
-                        insights = json.loads(carve['insights']) if carve['insights'].startswith('[') else []
-                        searchable_content.extend(insights)
-                except:
-                    pass
+                # Add basic fields
+                basic_fields = ['title', 'summary', 'closing']
+                for field in basic_fields:
+                    content = carve.get(field, '')
+                    if content:
+                        searchable_content.append(content)
+                
+                # Parse and add JSON arrays more carefully
+                json_fields = ['quotes', 'moments', 'insights']
+                for field in json_fields:
+                    field_content = carve.get(field)
+                    if field_content:
+                        try:
+                            # Handle both string and already-parsed arrays
+                            if isinstance(field_content, str):
+                                if field_content.startswith('['):
+                                    parsed_array = json.loads(field_content)
+                                else:
+                                    # Single string, treat as array of one
+                                    parsed_array = [field_content]
+                            elif isinstance(field_content, list):
+                                parsed_array = field_content
+                            else:
+                                continue
+                                
+                            # Add each item in the array to searchable content
+                            for item in parsed_array:
+                                if item and isinstance(item, str):
+                                    searchable_content.append(item)
+                                    
+                        except (json.JSONDecodeError, TypeError) as e:
+                            # If JSON parsing fails, try to search the raw string
+                            if isinstance(field_content, str):
+                                searchable_content.append(field_content)
                 
                 # Check for literal matches (case insensitive)
-                query_lower = query.lower()
+                query_lower = query.lower().strip()
+                match_found = False
+                match_content = ""
+                
                 for content in searchable_content:
-                    if content and query_lower in content.lower():
-                        literal_results.append({
-                            "id": carve["id"],
-                            "match_type": "literal",
-                            "match_content": content[:200] + "..." if len(content) > 200 else content,
-                            "distance": 0.0,  # Perfect match for literal
-                            "carve": carve
-                        })
-                        break  # Only count each carve once
+                    if content and isinstance(content, str):
+                        content_lower = content.lower()
+                        if query_lower in content_lower:
+                            match_found = True
+                            # Store the matching content for display
+                            if len(content) > 200:
+                                match_content = content[:200] + "..."
+                            else:
+                                match_content = content
+                            break  # Found a match, no need to continue
+                
+                if match_found:
+                if match_found:
+                    literal_results.append({
+                        "id": carve["id"],
+                        "match_type": "literal",
+                        "match_content": match_content,
+                        "distance": 0.0,  # Perfect match for literal
+                        "carve": carve
+                    })
         
         # STEP 3: Combine and deduplicate results
         combined_results = {}
