@@ -250,10 +250,10 @@ def create_carve():
         }), 500
 
 
-@app.route("/carves/search-enhanced", methods=["GET"])
-def search_carves_enhanced():
+@app.route("/carves/search", methods=["GET"])
+def search_carves():
     """
-    Enhanced hybrid search: Semantic + Literal text matching
+    Enhanced hybrid search: Semantic + Literal text matching with word boundaries
     Searches across all carve content, not just summary_snippet
     """
     query = request.args.get("query")
@@ -335,29 +335,45 @@ def search_carves_enhanced():
                             if isinstance(field_content, str):
                                 searchable_content.append(field_content)
                 
-                # Check for literal matches (case insensitive)
+                # Check for literal matches with word boundary prioritization
+                import re
                 query_lower = query.lower().strip()
                 match_found = False
                 match_content = ""
+                match_score = 0  # Higher score = better match
                 
                 for content in searchable_content:
                     if content and isinstance(content, str):
                         content_lower = content.lower()
-                        if query_lower in content_lower:
+                        
+                        # Check for exact word match first (highest priority)
+                        if re.search(r'\b' + re.escape(query_lower) + r'\b', content_lower):
                             match_found = True
-                            # Store the matching content for display
+                            match_score = 100  # Highest score for exact word match
                             if len(content) > 200:
                                 match_content = content[:200] + "..."
                             else:
                                 match_content = content
-                            break  # Found a match, no need to continue
+                            break  # Perfect match found, stop looking
+                        
+                        # Check for substring match (lower priority)
+                        elif query_lower in content_lower and match_score < 50:
+                            match_found = True
+                            match_score = 50  # Lower score for substring match
+                            if len(content) > 200:
+                                match_content = content[:200] + "..."
+                            else:
+                                match_content = content
+                            # Don't break - keep looking for exact word match
                 
+                if match_found:
                 if match_found:
                     literal_results.append({
                         "id": carve["id"],
                         "match_type": "literal",
                         "match_content": match_content,
-                        "distance": 0.0,  # Perfect match for literal
+                        "distance": (100 - match_score) / 100.0,  # Convert score to distance (lower = better)
+                        "match_score": match_score,  # For debugging
                         "carve": carve
                     })
         
