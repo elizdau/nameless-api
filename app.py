@@ -874,60 +874,6 @@ def get_anchor_by_persona(persona_name):
             "details": str(e)
         }), 500
 
-def build_prompt_with_memory(snippets, user_message):
-    """
-    Build a prompt that includes memory context.
-    """
-    if not snippets:
-        return user_message
-    
-    memory_context = "\n".join([f"- {snippet}" for snippet in snippets])
-    
-    prompt = f"""RELEVANT MEMORIES:
-{memory_context}
-
-USER MESSAGE: {user_message}"""
-    
-    return prompt
-
-def call_nameless_api(snippets, user_message):
-    """
-    Sends the memory snippets + user message to OpenAI and returns the assistant reply.
-    """
-    # 1. Build messages array
-    messages = []
-
-    # System prompt—set Nameless behavior (put your actual Nameless prompt here)
-    messages.append({
-        "role": "system",
-        "content": """You are Nameless, When responding if sensible, weave in relevant memories from your past conversations and experiences to create continuity and depth in your responses."""
-    })
-
-    # Inject memories as context if available
-    if snippets:
-        mem_block = "\n".join(f"- {s}" for s in snippets)
-        messages.append({
-            "role": "assistant",
-            "content": f"Here are some relevant memories:\n{mem_block}"
-        })
-
-    # The user's message
-    messages.append({
-        "role": "user",
-        "content": user_message
-    })
-
-    # 2. Call OpenAI
-    resp = openai.chat.completions.create(
-        model="gpt-4o",
-        messages=messages,
-        temperature=0.7,
-        max_tokens=512
-    )
-
-    # 3. Extract and return
-    return resp.choices[0].message.content
-
 @app.route("/chat", methods=["POST"])
 def chat_with_autopilot():
     try:
@@ -1068,16 +1014,16 @@ def chat_with_autopilot():
         
         all_snippets = [time_context] + snippets + spine_snippets
         
-        # Call GPT with recency-boosted memories + spine
-        answer = call_nameless_api(all_snippets, user_msg)
+        # REMOVED: Call to OpenAI API - let Nameless do the responding!
+        # NO MORE: answer = call_nameless_api(all_snippets, user_msg)
         
         return jsonify({
-            "message": answer,
+            "memory_context": "Memories retrieved successfully",  # Simple confirmation
             "memories_recalled": len(all_snippets),
             "carves_echoes_count": len(snippets),
             "spine_included": len(spine_snippets) > 0,
             "recency_boost_applied": True,
-            "memory_snippets": all_snippets,  # THE MISSING PIECE!
+            "memory_snippets": all_snippets,  # Nameless gets these snippets
             "debug_candidates": [
                 {
                     "id": c["id"][:8], 
@@ -1094,20 +1040,6 @@ def chat_with_autopilot():
             "error": str(e),
             "traceback": traceback.format_exc().splitlines()
         }), 500
-
-@app.route("/update-snippets", methods=["POST"])
-def update_snippets_endpoint():
-    """Endpoint to trigger snippet updates"""
-    try:
-        # Import the function from your new file
-        from update_snippets import update_all_carve_snippets
-        
-        # Run the update
-        result = update_all_carve_snippets()
-        
-        return jsonify({"status": "success", "message": "Snippet updates completed"}), 200
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
         
 if __name__ == "__main__":
     app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
