@@ -89,6 +89,112 @@ def cue_scan(user_message, thread_context):
             hits.append(filt)
     return hits
 
+def generate_dual_summaries(carve_data):
+    """Generate both factual and tonal summaries for enhanced recall"""
+    
+    # Extract key data
+    title = carve_data.get("title", "")
+    summary = carve_data.get("summary", "")
+    moments = carve_data.get("moments", [])
+    insights = carve_data.get("insights", [])
+    quotes = carve_data.get("quotes", [])
+    key_entities = carve_data.get("key_entities", [])
+    timestamp = carve_data.get("timestamp", "")
+    emotag = carve_data.get("emotag", "")
+    
+    # FACTUAL SUMMARY: Who, what, when, where, why - searchable
+    factual_parts = []
+    
+    # Add entities and basic facts
+    if key_entities and len(key_entities) > 0:
+        entity_str = ", ".join(str(e) for e in key_entities[:5])  # Top 5 entities
+        factual_parts.append(f"Involves: {entity_str}")
+    
+    # Add timestamp context if available
+    if timestamp:
+        try:
+            from datetime import datetime
+            if 'T' in timestamp:
+                dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+                factual_parts.append(f"Date: {dt.strftime('%B %d, %Y')}")
+        except:
+            pass
+    
+    # Add key factual moments (first 2-3)
+    factual_moments = []
+    for moment in moments[:3]:
+        if moment and len(str(moment)) < 150:  # Keep it concise
+            factual_moments.append(str(moment))
+    
+    if factual_moments:
+        factual_parts.append(f"Key events: {' | '.join(factual_moments)}")
+    
+    # Build factual summary
+    base_summary = summary[:150] + "..." if len(summary) > 150 else summary
+    if factual_parts:
+        factual_summary = f"{base_summary} // {' // '.join(factual_parts)}"
+    else:
+        factual_summary = base_summary
+    
+    if len(factual_summary) > 400:
+        factual_summary = factual_summary[:397] + "..."
+    
+    # TONAL SNIPPET: The hum, the heartbeat, the feeling
+    tonal_parts = []
+    
+    # Add emotional context
+    if emotag:
+        tonal_parts.append(f"[{emotag}]")
+    
+    # Find the most evocative quote or insight
+    evocative_content = None
+    for quote in quotes:
+        if quote and len(str(quote)) < 120:
+            quote_str = str(quote)
+            if any(word in quote_str.lower() for word in 
+                ['felt', 'heart', 'soul', 'breath', 'whisper', 'echo', 'light', 'shadow', 
+                 'warm', 'cold', 'still', 'wild', 'soft', 'gentle', 'fierce', 'quiet']):
+                evocative_content = f'"{quote_str}"'
+                break
+    
+    if not evocative_content:
+        for insight in insights:
+            if insight and len(str(insight)) < 120:
+                evocative_content = str(insight)
+                break
+    
+    # Extract tonal essence from summary (look for metaphors, sensory details)
+    tonal_essence = ""
+    summary_sentences = summary.split('. ')
+    for sentence in summary_sentences:
+        if any(word in sentence.lower() for word in 
+            ['like', 'as if', 'whisper', 'echo', 'rhythm', 'weight', 'light', 'shadow', 
+             'breath', 'heart', 'gentle', 'fierce', 'soft', 'wild', 'still']):
+            tonal_essence = sentence.strip()
+            break
+    
+    # Build tonal snippet
+    if evocative_content and tonal_essence:
+        tonal_snippet = f"{tonal_essence}. {evocative_content}"
+    elif evocative_content:
+        tonal_snippet = evocative_content
+    elif tonal_essence:
+        tonal_snippet = tonal_essence
+    else:
+        # Fallback to first part of summary
+        tonal_snippet = summary[:180] + "..."
+    
+    # Add emotional wrapper if available
+    if tonal_parts:
+        tonal_snippet = f"{' '.join(tonal_parts)} {tonal_snippet}"
+    
+    if len(tonal_snippet) > 300:
+        tonal_snippet = tonal_snippet[:297] + "..."
+    
+    return {
+        "factual_summary": factual_summary,
+        "tonal_snippet": tonal_snippet
+    }
 
 @app.route("/warmup", methods=["GET"])
 def warmup():
@@ -135,7 +241,7 @@ def warmup():
 @app.route("/carves", methods=["POST"])
 def create_carve():
     """
-    Create a new carve memory with full metadata.
+    Create a new carve memory with dual summaries for enhanced recall.
     """
     try:
         data = request.get_json(force=True)
@@ -143,13 +249,10 @@ def create_carve():
         # Required core fields
         title           = data.get("title")
         summary         = data.get("summary")
-        emotag          = data.get("emotag")        # NEW
-        persona_tag     = data.get("persona_tag")   # NEW
-        key_entities    = data.get("key_entities")  # NEW
-        importance      = data.get("importance")    # NEW
-
-        # If you want theme_tags also required, add it here:
-        # theme_tags     = data.get("theme_tags")
+        emotag          = data.get("emotag")
+        persona_tag     = data.get("persona_tag")
+        key_entities    = data.get("key_entities")
+        importance      = data.get("importance")
 
         # Basic presence check
         missing = []
@@ -160,7 +263,6 @@ def create_carve():
             ("persona_tag", persona_tag),
             ("key_entities", key_entities),
             ("importance", importance),
-            # ("theme_tags", theme_tags),
         ):
             if val is None or (isinstance(val, (list,str)) and len(val) == 0):
                 missing.append(field_name)
@@ -174,19 +276,26 @@ def create_carve():
                 400
             )
 
-        # Auto-generate summary_snippet
-        summary_snippet = summary[:200] + "…" if len(summary) > 200 else summary
+        # Generate dual summaries
+        dual_summaries = generate_dual_summaries(data)
 
         carve_data = {
             "title":           title,
             "summary":         summary,
-            "summary_snippet": summary_snippet,
+            
+            # NEW: Dual summary fields
+            "factual_summary": dual_summaries["factual_summary"],
+            "tonal_snippet":   dual_summaries["tonal_snippet"],
+            
+            # Keep original for backwards compatibility
+            "summary_snippet": summary[:200] + "…" if len(summary) > 200 else summary,
+
             "moments":         data.get("moments", []),
             "insights":        data.get("insights", []),
             "quotes":          data.get("quotes", []),
             "closing":         data.get("closing"),
 
-            # ** now required **
+            # required fields
             "emotag":       emotag,
             "persona_tag":  persona_tag,
             "key_entities": key_entities,
@@ -248,8 +357,6 @@ def create_carve():
             "error": "Failed to create carve",
             "details": str(e)
         }), 500
-
-# Add these to your app.py to restore the missing endpoints
 
 @app.route("/carves/search", methods=["GET"])
 def search_carves():
