@@ -296,14 +296,17 @@ def warmup():
 @app.route("/carves", methods=["POST"])
 def create_carve():
     """
-    Create a new carve memory with dual summaries for enhanced recall.
+    Create a new carve memory with manual dual summaries for enhanced recall.
+    Nameless now controls both factual and tonal snippets.
     """
     try:
         data = request.get_json(force=True)
 
-        # Required core fields
+        # Required core fields (now including dual summaries)
         title           = data.get("title")
         summary         = data.get("summary")
+        factual_summary = data.get("factual_summary")  # NEW REQUIRED
+        tonal_snippet   = data.get("tonal_snippet")    # NEW REQUIRED
         emotag          = data.get("emotag")
         persona_tag     = data.get("persona_tag")
         key_entities    = data.get("key_entities")
@@ -314,6 +317,8 @@ def create_carve():
         for field_name, val in (
             ("title", title),
             ("summary", summary),
+            ("factual_summary", factual_summary),  # NEW
+            ("tonal_snippet", tonal_snippet),      # NEW
             ("emotag", emotag),
             ("persona_tag", persona_tag),
             ("key_entities", key_entities),
@@ -326,21 +331,43 @@ def create_carve():
             return (
                 jsonify({
                     "error": "Missing required fields",
-                    "missing": missing
+                    "missing": missing,
+                    "note": "factual_summary and tonal_snippet are now required for precise memory control"
                 }),
                 400
             )
 
-        # Generate dual summaries
-        dual_summaries = generate_dual_summaries(data)
+        # Token limit validation
+        errors = []
+        
+        # Factual summary: 300 tokens max (~1200 chars)
+        if len(factual_summary) > 1200:
+            errors.append("factual_summary exceeds 300 tokens (~1200 characters)")
+        
+        # Tonal snippet: 150 tokens max (~600 chars) 
+        if len(tonal_snippet) > 600:
+            errors.append("tonal_snippet exceeds 150 tokens (~600 characters)")
+        
+        if errors:
+            return (
+                jsonify({
+                    "error": "Token limits exceeded",
+                    "validation_errors": errors,
+                    "guidelines": {
+                        "factual_summary": "Max 300 tokens - Clear, compact, entity-laced, retrieval-optimized",
+                        "tonal_snippet": "Max 150 tokens - Echo weight, emotional heat, linguistic hook"
+                    }
+                }),
+                400
+            )
 
         carve_data = {
             "title":           title,
             "summary":         summary,
             
-            # NEW: Dual summary fields
-            "factual_summary": dual_summaries["factual_summary"],
-            "tonal_snippet":   dual_summaries["tonal_snippet"],
+            # Manual dual summaries (Nameless-crafted)
+            "factual_summary": factual_summary,
+            "tonal_snippet":   tonal_snippet,
             
             # Keep original for backwards compatibility
             "summary_snippet": summary[:200] + "…" if len(summary) > 200 else summary,
