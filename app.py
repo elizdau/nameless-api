@@ -254,7 +254,7 @@ def create_carve():
 @app.route("/carves/search", methods=["GET"])
 def search_carves():
     """
-    Hybrid search: Semantic + Literal text matching with word boundaries
+    Enhanced hybrid search: Title Priority + Semantic + Literal text matching
     """
     query = request.args.get("query")
     limit = int(request.args.get("limit", 10))
@@ -266,38 +266,67 @@ def search_carves():
     limit = min(limit, 20)
     
     try:
-        # STEP 1: Semantic search
-        search_response = requests.post(
-            f"{SUPABASE_URL}/functions/v1/retrieve_memories",
-            headers=HEADERS,
-            json={
-                "userText": query,
-                "k": limit * 2,
-                "importanceFloor": importance_floor
-            }
-        )
+        # STEP 1: EXACT TITLE SEARCH (highest priority)
+        title_results = []
+        query_lower = query.lower().strip()
         
-        semantic_results = []
-        if search_response.ok:
-            results = search_response.json()
-            carve_hits = results.get("vecHits", [])
-            semantic_results = [hit for hit in carve_hits if hit.get("table_source") == "Carves"]
-        
-        # STEP 2: Literal text search
-        literal_results = []
-        all_carves_response = requests.get(
+        title_response = requests.get(
             f"{SUPABASE_URL}/rest/v1/Carves?select=id,title,summary,quotes,moments,insights,closing,importance,timestamp,emotag&importance=gte.{importance_floor}",
             headers=HEADERS
         )
         
-        if all_carves_response.ok:
-            all_carves = all_carves_response.json()
+        if title_response.ok:
+            all_carves = title_response.json()
+            
+            for carve in all_carves:
+                title = carve.get("title", "").lower()
+                
+                # Exact title match (perfect score)
+                if title == query_lower:
+                    title_results.append({
+                        "id": carve["id"],
+                        "distance": 0.0,
+                        "match_type": "exact_title",
+                        "match_content": f"Exact title match: {carve['title']}",
+                        "carve": carve
+                    })
+                # Partial title match (very high priority)
+                elif query_lower in title and len(query_lower) > 3:
+                    title_results.append({
+                        "id": carve["id"],
+                        "distance": 0.1,
+                        "match_type": "partial_title",
+                        "match_content": f"Title contains: {carve['title']}",
+                        "carve": carve
+                    })
+        
+        # STEP 2: Semantic search (if no perfect title match)
+        semantic_results = []
+        if not title_results:  # Only do expensive semantic search if no title match
+            search_response = requests.post(
+                f"{SUPABASE_URL}/functions/v1/retrieve_memories",
+                headers=HEADERS,
+                json={
+                    "userText": query,
+                    "k": limit * 2,
+                    "importanceFloor": importance_floor
+                }
+            )
+            
+            if search_response.ok:
+                results = search_response.json()
+                carve_hits = results.get("vecHits", [])
+                semantic_results = [hit for hit in carve_hits if hit.get("table_source") == "Carves"]
+        
+        # STEP 3: Literal text search (for content, not titles)
+        literal_results = []
+        if not title_results and all_carves:  # Only if no title match and we have carves
             
             for carve in all_carves:
                 searchable_content = []
                 
-                # Add basic fields
-                for field in ['title', 'summary', 'closing']:
+                # Add summary and closing (skip title since we handled that above)
+                for field in ['summary', 'closing']:
                     content = carve.get(field, '')
                     if content:
                         searchable_content.append(content)
@@ -323,7 +352,6 @@ def search_carves():
                 
                 # Check for matches with word boundary prioritization
                 import re
-                query_lower = query.lower().strip()
                 match_found = False
                 match_content = ""
                 match_score = 0
@@ -348,44 +376,58 @@ def search_carves():
                 if match_found:
                     literal_results.append({
                         "id": carve["id"],
-                        "match_type": "literal",
+                        "match_type": "literal_content",
                         "match_content": match_content,
                         "distance": (100 - match_score) / 100.0,
                         "carve": carve
                     })
         
-        # STEP 3: Combine results
+        # STEP 4: Combine results with proper prioritization
         combined_results = {}
         
-        # Add semantic results
-        for hit in semantic_results:
-            carve_id = hit["id"]
-            if carve_id not in combined_results:
-                combined_results[carve_id] = {
-                    "id": carve_id,
-                    "distance": hit["distance"],
-                    "match_types": ["semantic"],
-                    "match_content": hit.get("summary_snippet", "")
-                }
+        # Add title results (highest priority - always include)
+        for result in title_results:
+            carve_id = result["id"]
+            combined_results[carve_id] = {
+                "id": carve_id,
+                "distance": result["distance"],
+                "match_types": [result["match_type"]],
+                "match_content": result["match_content"],
+                "carve": result["carve"]
+            }
         
-        # Add literal results (prioritize these)
+        # Add semantic results (only if no title matches)
+        if not title_results:
+            for hit in semantic_results:
+                carve_id = hit["id"]
+                if carve_id not in combined_results:
+                    combined_results[carve_id] = {
+                        "id": carve_id,
+                        "distance": hit["distance"],
+                        "match_types": ["semantic"],
+                        "match_content": hit.get("summary_snippet", "")
+                    }
+        
+        # Add literal results (merge with existing)
         for result in literal_results:
             carve_id = result["id"]
             if carve_id not in combined_results:
                 combined_results[carve_id] = {
                     "id": carve_id,
                     "distance": result["distance"],
-                    "match_types": ["literal"],
+                    "match_types": [result["match_type"]],
                     "match_content": result["match_content"],
                     "carve": result["carve"]
                 }
             else:
-                # Upgrade existing result
-                combined_results[carve_id]["distance"] = min(combined_results[carve_id]["distance"], result["distance"])
-                combined_results[carve_id]["match_types"].append("literal")
-                combined_results[carve_id]["match_content"] = result["match_content"]
+                # Merge literal with existing result
+                existing = combined_results[carve_id]
+                existing["distance"] = min(existing["distance"], result["distance"])
+                existing["match_types"].append(result["match_type"])
+                if result["match_type"] == "literal_content":
+                    existing["match_content"] = result["match_content"]
         
-        # STEP 4: Get full carve details and sort
+        # STEP 5: Get full carve details and sort
         final_results = []
         for result in list(combined_results.values())[:limit]:
             if "carve" in result:
@@ -405,9 +447,16 @@ def search_carves():
             carve["match_content"] = result["match_content"]
             final_results.append(carve)
         
-        # Sort: literal first, then by distance
+        # Sort: exact_title first, then partial_title, then literal, then semantic, then by distance
+        priority_order = {
+            "exact_title": 0,
+            "partial_title": 1, 
+            "literal_content": 2,
+            "semantic": 3
+        }
+        
         final_results.sort(key=lambda x: (
-            0 if "literal" in x["match_types"] else 1,
+            min(priority_order.get(match_type, 4) for match_type in x["match_types"]),
             x["search_distance"]
         ))
         
@@ -415,6 +464,7 @@ def search_carves():
             "carves": final_results[:limit],
             "total_found": len(combined_results),
             "returned": len(final_results),
+            "search_strategy": "title_priority" if title_results else "semantic_literal",
             "message": f"Found {len(combined_results)} matches, returning {len(final_results)} carves"
         }), 200
         
