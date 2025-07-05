@@ -196,6 +196,61 @@ def generate_dual_summaries(carve_data):
         "tonal_snippet": tonal_snippet
     }
 
+def get_enhanced_memory_snippet(memory_id):
+    """Get enhanced memory snippet using dual summaries when available"""
+    
+    # Try carves first
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/Carves?id=eq.{memory_id}&select=title,factual_summary,tonal_snippet,summary_snippet",
+        headers=HEADERS
+    ).json()
+    
+    if r:
+        carve = r[0]
+        title = carve.get('title', 'Untitled')
+        
+        # Use dual summaries if available, fallback to original
+        factual = carve.get('factual_summary')
+        tonal = carve.get('tonal_snippet') 
+        fallback = carve.get('summary_snippet', '')
+        
+        if factual and tonal:
+            # Balanced approach: factual for context, tonal for resonance
+            snippet = f"[CARVE: {title}] {factual} // Resonance: {tonal}"
+        elif factual:
+            snippet = f"[CARVE: {title}] {factual}"
+        elif tonal:
+            snippet = f"[CARVE: {title}] {tonal}"
+        else:
+            snippet = f"[CARVE: {title}] {fallback}"
+        
+        return snippet
+    
+    # If not a carve, try echoes (unchanged from your current logic)
+    r = requests.get(
+        f"{SUPABASE_URL}/rest/v1/Echoes?id=eq.{memory_id}&select=summary_snippet,tags,persona_tag,source",
+        headers=HEADERS
+    ).json()
+    
+    if r:
+        echo = r[0]
+        tags_str = ', '.join(echo.get('tags', [])) if echo.get('tags') else 'no tags'
+        persona = echo.get('persona_tag', '')
+        source = echo.get('source', '')
+        
+        if persona:
+            snippet = f"[ECHO by {persona}] {echo['summary_snippet']}"
+        else:
+            snippet = f"[ECHO] {echo['summary_snippet']}"
+        
+        snippet += f" (tags: {tags_str})"
+        if source:
+            snippet += f" (context: {source})"
+        
+        return snippet
+    
+    return None
+
 @app.route("/warmup", methods=["GET"])
 def warmup():
     """
