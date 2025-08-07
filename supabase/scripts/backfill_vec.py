@@ -187,4 +187,13 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    try:
+        main()
+        sys.exit(0)   # success even if 0 rows updated
+    except KeyboardInterrupt:
+        sys.exit(1)
+    except Exception as e:
+        print("Fatal:", e, flush=True)
+        sys.exit(1)
+
