@@ -62,6 +62,26 @@ compiled_rules = [
 app = Flask(__name__)
 
 # ------------------------------------------------------------
+def _format_chat_message(snippets, telemetry=None):
+    lines = ["Memory Snippets Retrieved"]
+    for s in snippets:
+        lines.append(f"- {s}")
+    if telemetry:
+        counts = telemetry.get("counts", {})
+        stats = telemetry.get("distance_stats", {})
+        lines.append("")
+        lines.append("Retrieval Telemetry Summary")
+        lines.append("")
+        lines.append("Counts")
+        lines.append(f"- Total candidates: {counts.get('total_candidates')}")
+        lines.append(f"- Within max distance: {counts.get('within_max_distance')}")
+        lines.append("")
+        lines.append("Distance Stats")
+        lines.append(f"- Min: {stats.get('min')}")
+        lines.append(f"- Median: {stats.get('median')}")
+        lines.append(f"- P90: {stats.get('p90')}")
+    return "\n".join(lines)
+
 # Static files for plugin/OpenAPI
 # ------------------------------------------------------------
 
@@ -83,26 +103,6 @@ def plugin_logo():
 # ------------------------------------------------------------
 # Utilities
 # ------------------------------------------------------------
-
-def _format_chat_message(snippets, telemetry=None):
-    lines = ["Memory Snippets Retrieved"]
-    for s in snippets:
-        lines.append(f"- {s}")
-    if telemetry:
-        counts = telemetry.get("counts", {})
-        stats = telemetry.get("distance_stats", {})
-        lines.append("")
-        lines.append("Retrieval Telemetry Summary")
-        lines.append("")
-        lines.append("Counts")
-        lines.append(f"- Total candidates: {counts.get('total_candidates')}")
-        lines.append(f"- Within max distance: {counts.get('within_max_distance')}")
-        lines.append("")
-        lines.append("Distance Stats")
-        lines.append(f"- Min: {stats.get('min')}")
-        lines.append(f"- Median: {stats.get('median')}")
-        lines.append(f"- P90: {stats.get('p90')}")
-    return "\n".join(lines)
 
 def pick_fields(records, *fields):
     return [{f: r.get(f) for f in fields} for r in records]
