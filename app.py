@@ -380,7 +380,7 @@ def warmup():
             for row in raw_spine
         ]
 
-        # --- Carves: unchanged fields ---
+        # --- Carves: unchanged fields (4 most recent) ---
         carves_res = requests.get(
             f"{SUPABASE_URL}/rest/v1/Carves?order=timestamp.desc&limit=4",
             headers=HEADERS
@@ -1044,6 +1044,14 @@ def chat_with_autopilot():
     Returns memory snippets for the assistant to use this turn.
     Injects a system reminder to call this endpoint every message
     and optionally includes a single Spine entry (targeted or occasional).
+
+    Optional request fields for testing/policing retrieval:
+      - debug: bool -> include telemetry & candidate details
+      - k: int -> number of candidates to retrieve (default 15)
+      - importance_floor: float -> minimum importance for retrieval (default 0.3)
+      - max_distance: float -> if set, drop candidates with distance > max_distance
+      - inject_reminder: bool -> override server default
+      - inject_position: "start"|"end"
     """
     try:
         data = request.get_json() or {}
@@ -1056,6 +1064,26 @@ def chat_with_autopilot():
         inject_reminder = bool(data.get("inject_reminder", REMINDER_ENABLED))
         inject_position = data.get("inject_position", REMINDER_POSITION)  # "start"|"end"
 
+        # Retrieval tuning (clamped to sane bounds)
+        try:
+            retrieve_k = int(data.get("k", 15))
+        except Exception:
+            retrieve_k = 15
+        retrieve_k = max(1, min(retrieve_k, 100))
+
+        try:
+            importance_floor = float(data.get("importance_floor", 0.3))
+        except Exception:
+            importance_floor = 0.3
+        importance_floor = max(0.0, min(importance_floor, 1.0))
+
+        max_distance = data.get("max_distance", None)
+        if max_distance is not None:
+            try:
+                max_distance = float(max_distance)
+            except Exception:
+                max_distance = None
+
         init_thread(thread_id)
         # bump turn index first so cooldown checks are correct
         conversation_cache[thread_id]["turn_index"] += 1
@@ -1067,15 +1095,21 @@ def chat_with_autopilot():
         resp = requests.post(
             f"{SUPABASE_URL}/functions/v1/retrieve_memories",
             headers=HEADERS,
-            json={"userText": user_msg, "k": 15, "importanceFloor": 0.3},
+            json={"userText": user_msg, "k": retrieve_k, "importanceFloor": importance_floor},
         )
         resp.raise_for_status()
         candidates = resp.json().get("vecHits", [])
 
-        # Recency boost
+        # Optional quality gate before ranking
+        if max_distance is not None:
+            filtered = [h for h in candidates if isinstance(h.get("distance"), (int, float)) and h["distance"] <= max_distance]
+        else:
+            filtered = list(candidates)
+
+        # Recency boost (still using distance-minus-boost to match your current approach)
         candidates_with_recency = []
         now_utc = datetime.now(timezone.utc)
-        for hit in candidates:
+        for hit in filtered:
             try:
                 ts_str = hit.get("timestamp", "")
                 if ts_str:
@@ -1092,7 +1126,7 @@ def chat_with_autopilot():
                     adj = hit["distance"]
                 candidates_with_recency.append({**hit, "adjusted_distance": adj, "days_ago": days_ago})
             except Exception:
-                candidates_with_recency.append({**hit, "adjusted_distance": hit["distance"], "days_ago": 999})
+                candidates_with_recency.append({**hit, "adjusted_distance": hit.get("distance", 1.0), "days_ago": 999})
 
         top_candidates = sorted(candidates_with_recency, key=lambda m: m["adjusted_distance"])[:MAX_WORKING_SET]
         top_ids = [m["id"] for m in top_candidates]
@@ -1127,11 +1161,46 @@ def chat_with_autopilot():
             "recency_boost_applied": True,
         }
 
+        # Debug telemetry (optional)
         if debug_verbose:
+            # Distance stats on the ORIGINAL candidate set (pre-filter), plus counts
+            dists = [c.get("distance") for c in candidates if isinstance(c.get("distance"), (int, float))]
+            d_sorted = sorted(dists) if dists else []
+
+            def percentile(arr, p):
+                if not arr:
+                    return None
+                if len(arr) == 1:
+                    return arr[0]
+                k = int(round((p / 100.0) * (len(arr) - 1)))
+                k = max(0, min(k, len(arr) - 1))
+                return arr[k]
+
+            telemetry = {
+                "params": {
+                    "k": retrieve_k,
+                    "importance_floor": importance_floor,
+                    "max_distance": max_distance,
+                },
+                "counts": {
+                    "total_candidates": len(candidates),
+                    "within_max_distance": (
+                        sum(1 for c in candidates if isinstance(c.get("distance"), (int, float)) and c["distance"] <= max_distance)
+                        if max_distance is not None else len(candidates)
+                    ),
+                },
+                "distance_stats": {
+                    "min": d_sorted[0] if d_sorted else None,
+                    "median": percentile(d_sorted, 50),
+                    "p90": percentile(d_sorted, 90),
+                },
+            }
+
             base_payload.update(
                 {
                     "memories_recalled": len(all_snippets),
                     "carves_echoes_count": len(snippets),
+                    "retrieval_telemetry": telemetry,
                     "debug_candidates": [
                         {
                             "id": c.get("id", "")[:8],
