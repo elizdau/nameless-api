@@ -1108,6 +1108,42 @@ def chat_with_autopilot():
         # bump turn index first so cooldown checks are correct
         conversation_cache[thread_id]["turn_index"] += 1
 
+        # --- First-turn warmup failsafe (server-side) ---
+        first_turn = conversation_cache[thread_id]["turn_index"] == 1
+        prelude_snippets = []
+        if first_turn:
+            try:
+                # Compact anchors: "(Persona) summary"
+                a = requests.get(
+                    f"{SUPABASE_URL}/rest/v1/Anchor?order=timestamp.desc&select=summary_snippet,persona_tag&limit=8",
+                    headers=HEADERS
+                )
+                if a.ok:
+                    anchors_compact = [
+                        (f"({row.get('persona_tag')}) {row.get('summary_snippet')}".strip()
+                         if row.get('persona_tag') else row.get('summary_snippet', ""))
+                        for row in a.json()
+                    ]
+                    # include just one anchor line to keep the prelude light
+                    if anchors_compact and anchors_compact[0]:
+                        prelude_snippets.append(f"(ANCHOR) {anchors_compact[0]}")
+        
+                # Top spine by importance then recency: "(Persona) statement"
+                s = requests.get(
+                    f"{SUPABASE_URL}/rest/v1/Spine?select=statement,persona_tag&order=importance.desc&order=timestamp.desc&limit=1",
+                    headers=HEADERS
+                )
+                if s.ok and s.json():
+                    row = s.json()[0]
+                    spine_line = (f"({row.get('persona_tag')}) {row.get('statement')}".strip()
+                                  if row.get('persona_tag') else row.get('statement', ""))
+                    if spine_line:
+                        prelude_snippets.append(f"(SPINE) {spine_line}")
+            except Exception as _e:
+                
+                # Non-fatal: if this fails we just skip the prelude
+                app.logger.warning(f"Warmup prelude failed: {_e}")
+
         # keep for parity (unused output), but don't surface in response
         _triggered_f = cue_scan(user_msg, conversation_cache[thread_id])
 
