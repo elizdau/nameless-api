@@ -1104,18 +1104,21 @@ def chat_with_autopilot():
             except Exception:
                 max_distance = None
 
+        # -------------------------------
+        # Thread state & first-turn prelude
+        # -------------------------------
         init_thread(thread_id)
-        # bump turn index first so cooldown checks are correct
-        conversation_cache[thread_id]["turn_index"] += 1
-
-        # --- First-turn warmup failsafe (server-side) ---
+        conversation_cache[thread_id]["turn_index"] += 1  # bump first so cooldown math is correct
         first_turn = conversation_cache[thread_id]["turn_index"] == 1
+
+        # First-turn warmup failsafe (server-side)
         prelude_snippets = []
         if first_turn:
             try:
-                # Compact anchors: "(Persona) summary"
+                # Compact Anchors: "(Persona) summary" — pick 1 to stay light
                 a = requests.get(
-                    f"{SUPABASE_URL}/rest/v1/Anchor?order=timestamp.desc&select=summary_snippet,persona_tag&limit=8",
+                    f"{SUPABASE_URL}/rest/v1/Anchor"
+                    f"?order=timestamp.desc&select=summary_snippet,persona_tag&limit=8",
                     headers=HEADERS
                 )
                 if a.ok:
@@ -1124,13 +1127,13 @@ def chat_with_autopilot():
                          if row.get('persona_tag') else row.get('summary_snippet', ""))
                         for row in a.json()
                     ]
-                    # include just one anchor line to keep the prelude light
                     if anchors_compact and anchors_compact[0]:
                         prelude_snippets.append(f"(ANCHOR) {anchors_compact[0]}")
-        
-                # Top spine by importance then recency: "(Persona) statement"
+
+                # Top Spine by importance then recency — pick 1
                 s = requests.get(
-                    f"{SUPABASE_URL}/rest/v1/Spine?select=statement,persona_tag&order=importance.desc&order=timestamp.desc&limit=1",
+                    f"{SUPABASE_URL}/rest/v1/Spine"
+                    f"?select=statement,persona_tag&order=importance.desc&order=timestamp.desc&limit=1",
                     headers=HEADERS
                 )
                 if s.ok and s.json():
@@ -1140,14 +1143,14 @@ def chat_with_autopilot():
                     if spine_line:
                         prelude_snippets.append(f"(SPINE) {spine_line}")
             except Exception as _e:
-                
-                # Non-fatal: if this fails we just skip the prelude
                 app.logger.warning(f"Warmup prelude failed: {_e}")
 
         # keep for parity (unused output), but don't surface in response
         _triggered_f = cue_scan(user_msg, conversation_cache[thread_id])
 
-        # ---- Retrieve candidate memories (vec search) ----
+        # -------------------------------
+        # Retrieve candidate memories (vec search)
+        # -------------------------------
         resp = requests.post(
             f"{SUPABASE_URL}/functions/v1/retrieve_memories",
             headers=HEADERS,
@@ -1158,11 +1161,14 @@ def chat_with_autopilot():
 
         # Optional quality gate before ranking
         if max_distance is not None:
-            filtered = [h for h in candidates if isinstance(h.get("distance"), (int, float)) and h["distance"] <= max_distance]
+            filtered = [
+                h for h in candidates
+                if isinstance(h.get("distance"), (int, float)) and h["distance"] <= max_distance
+            ]
         else:
             filtered = list(candidates)
 
-        # Recency boost (still using distance-minus-boost to match your current approach)
+        # Recency boost (distance-minus-boost)
         candidates_with_recency = []
         now_utc = datetime.now(timezone.utc)
         for hit in filtered:
@@ -1196,30 +1202,32 @@ def chat_with_autopilot():
                 snippets.append(snip)
 
         # Optional Spine injection (targeted or occasional, max 1)
-        spine_snippets = maybe_include_spine(thread_id, user_msg)
+        # Avoid double-spine on first turn (we may have prelude SPINE).
+        spine_snippets = [] if first_turn else maybe_include_spine(thread_id, user_msg)
 
         # Time context (Central Time)
         central_tz = pytz.timezone("US/Central")
         time_context = f"Current time: {datetime.now(central_tz).strftime('%A, %B %d, %Y at %I:%M %p %Z')}"
 
-        # Reminder injection
+        # Reminder injection + final assembly
         if inject_reminder and inject_position == "start":
-            all_snippets = [REMINDER_TEXT, time_context] + snippets + spine_snippets
+            all_snippets = [REMINDER_TEXT, time_context] + prelude_snippets + snippets + spine_snippets
         else:
-            all_snippets = [time_context] + snippets + spine_snippets
+            all_snippets = [time_context] + prelude_snippets + snippets + spine_snippets
             if inject_reminder and inject_position == "end":
                 all_snippets.append(REMINDER_TEXT)
 
-        # Compact response by default; include debug only if asked
+        # -------------------------------
+        # Payload
+        # -------------------------------
         base_payload = {
             "memory_snippets": all_snippets,
-            "spine_included": len(spine_snippets) > 0,
+            "spine_included": len(spine_snippets) > 0 or any(s.startswith("(SPINE)") for s in prelude_snippets),
             "recency_boost_applied": True,
         }
 
         # Debug telemetry (optional)
         if debug_verbose:
-            # Distance stats on the ORIGINAL candidate set (pre-filter), plus counts
             dists = [c.get("distance") for c in candidates if isinstance(c.get("distance"), (int, float))]
             d_sorted = sorted(dists) if dists else []
 
@@ -1268,23 +1276,20 @@ def chat_with_autopilot():
                     ],
                 }
             )
-
-                # Build a human-readable message so the UI prints it
-        if debug_verbose:
+            # Make the UI actually paste something useful
             base_payload["message"] = _format_chat_message(
                 all_snippets,
                 base_payload.get("retrieval_telemetry")
             )
         else:
-            # Light message so something always shows
             base_payload["message"] = "Memory payload prepared. Set debug=true to include snippets + telemetry."
-
 
         return jsonify(base_payload), 200
 
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "traceback": traceback.format_exc().splitlines()}), 500
+
 
 
 # ------------------------------------------------------------
