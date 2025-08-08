@@ -356,26 +356,45 @@ def maybe_include_spine(thread_id, user_msg):
 @app.route("/warmup", methods=["GET"])
 def warmup():
     try:
-        anchor_res = requests.get(f"{SUPABASE_URL}/rest/v1/Anchor?order=timestamp.desc", headers=HEADERS)
+        # --- Anchor: compact strings "(Persona) summary" ---
+        anchor_res = requests.get(
+            f"{SUPABASE_URL}/rest/v1/Anchor?order=timestamp.desc&select=summary_snippet,persona_tag",
+            headers=HEADERS
+        )
         raw_anchors = anchor_res.json() if anchor_res.ok else []
-        anchors = pick_fields(raw_anchors, "summary_snippet", "persona_tag")
+        anchors = [
+            (f"({row.get('persona_tag')}) {row.get('summary_snippet')}".strip()
+             if row.get('persona_tag') else row.get('summary_snippet', ""))
+            for row in raw_anchors
+        ]
 
+        # --- Spine: compact strings "(Persona) statement" ---
         spine_res = requests.get(
             f"{SUPABASE_URL}/rest/v1/Spine?order=timestamp.desc&select=statement,persona_tag",
             headers=HEADERS
         )
         raw_spine = spine_res.json() if spine_res.ok else []
-        spine = pick_fields(raw_spine, "statement", "persona_tag")
+        spine = [
+            (f"({row.get('persona_tag')}) {row.get('statement')}".strip()
+             if row.get('persona_tag') else row.get('statement', ""))
+            for row in raw_spine
+        ]
 
+        # --- Carves: unchanged fields ---
         carves_res = requests.get(
-            f"{SUPABASE_URL}/rest/v1/Carves?order=timestamp.desc&limit=4", headers=HEADERS
+            f"{SUPABASE_URL}/rest/v1/Carves?order=timestamp.desc&limit=4",
+            headers=HEADERS
         )
         raw_carves = carves_res.json() if carves_res.ok else []
         carves = pick_fields(
             raw_carves, "title", "timestamp", "summary", "moments", "insights", "quotes", "closing"
         )
 
-        return jsonify({"anchor": anchors, "spine": spine, "recentCarves": carves}), 200
+        return jsonify({
+            "anchor": anchors,          # now: List[str]
+            "spine": spine,             # now: List[str]
+            "recentCarves": carves      # unchanged
+        }), 200
 
     except Exception as e:
         return jsonify({"error": "Failed to fetch warmup memory", "details": str(e)}), 500
