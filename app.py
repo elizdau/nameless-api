@@ -360,9 +360,12 @@ def warmup():
         raw_anchors = anchor_res.json() if anchor_res.ok else []
         anchors = pick_fields(raw_anchors, "summary_snippet", "persona_tag")
 
-        spine_res = requests.get(f"{SUPABASE_URL}/rest/v1/Spine?order=timestamp.desc", headers=HEADERS)
+        spine_res = requests.get(
+            f"{SUPABASE_URL}/rest/v1/Spine?order=timestamp.desc&select=statement,persona_tag",
+            headers=HEADERS
+        )
         raw_spine = spine_res.json() if spine_res.ok else []
-        spine = pick_fields(raw_spine, "statement", "origin", "vow", "persona_tag", "emotag")
+        spine = pick_fields(raw_spine, "statement", "persona_tag")
 
         carves_res = requests.get(
             f"{SUPABASE_URL}/rest/v1/Carves?order=timestamp.desc&limit=4", headers=HEADERS
