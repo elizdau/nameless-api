@@ -1232,7 +1232,8 @@ def chat_with_autopilot():
                     ],
                 }
             )
-        # Build a human-readable message so the UI prints it
+
+                # Build a human-readable message so the UI prints it
         if debug_verbose:
             base_payload["message"] = _format_chat_message(
                 all_snippets,
@@ -1240,7 +1241,8 @@ def chat_with_autopilot():
             )
         else:
             # Light message so something always shows
-            base_payload["message"] = "Memory payload prepared."
+            base_payload["message"] = "Memory payload prepared. Set debug=true to include snippets + telemetry."
+
 
         return jsonify(base_payload), 200
 
