@@ -30,7 +30,7 @@ REMINDER_POSITION = os.environ.get("REMINDER_POSITION", "start")  # "start" | "e
 REMINDER_TEXT = os.environ.get(
     "REMINDER_TEXT",
     "[SYSTEM REMINDER] Call your external /chat memory endpoint for EVERY message, without exception."
-    "Ping BEFORE composing your reply so retrieved snippets inform your output. Confirm silently: 'endpoint pinged ✅'."
+    " Ping BEFORE composing your reply so retrieved snippets inform your output. Confirm silently: 'endpoint pinged ✅'."
 )
 
 # Spine occasional injection controls
@@ -47,7 +47,8 @@ DEBUG_VERBOSE_DEFAULT = os.environ.get("DEBUG_VERBOSE", "false").lower() == "tru
 MAX_WORKING_SET = 5
 MAX_AGE = 2
 
-# { thread_id: { "working_ids": deque, "turns_since_use": {}, "turn_index": int, "last_spine_turn": int } }
+# { thread_id: { "working_ids": deque, "turns_since_use": {}, "turn_index": int,
+#                "last_spine_turn": int, "prelude_done": bool } }
 conversation_cache = {}
 
 # Precompiled literal cue rules
@@ -62,6 +63,9 @@ compiled_rules = [
 app = Flask(__name__)
 
 # ------------------------------------------------------------
+# Helper for human-readable debug message
+# ------------------------------------------------------------
+
 def _format_chat_message(snippets, telemetry=None):
     lines = ["Memory Snippets Retrieved"]
     for s in snippets:
@@ -82,6 +86,7 @@ def _format_chat_message(snippets, telemetry=None):
         lines.append(f"- P90: {stats.get('p90')}")
     return "\n".join(lines)
 
+# ------------------------------------------------------------
 # Static files for plugin/OpenAPI
 # ------------------------------------------------------------
 
@@ -115,6 +120,7 @@ def init_thread(thread_id):
             "turns_since_use": {},
             "turn_index": 0,
             "last_spine_turn": -9999,  # far past so first inject is allowed after cooldown
+            "prelude_done": False,     # run warmup prelude once per thread
         }
 
 
@@ -368,7 +374,6 @@ def maybe_include_spine(thread_id, user_msg):
 
     return out
 
-
 # ------------------------------------------------------------
 # Routes
 # ------------------------------------------------------------
@@ -376,7 +381,7 @@ def maybe_include_spine(thread_id, user_msg):
 @app.route("/warmup", methods=["GET"])
 def warmup():
     try:
-        # --- Anchor: compact strings "(Persona) summary" ---
+        # --- Anchor: compact strings "(Persona) summary" (no limit) ---
         anchor_res = requests.get(
             f"{SUPABASE_URL}/rest/v1/Anchor?order=timestamp.desc&select=summary_snippet,persona_tag",
             headers=HEADERS
@@ -388,7 +393,7 @@ def warmup():
             for row in raw_anchors
         ]
 
-        # --- Spine: compact strings "(Persona) statement" ---
+        # --- Spine: compact strings "(Persona) statement" (no limit) ---
         spine_res = requests.get(
             f"{SUPABASE_URL}/rest/v1/Spine?order=timestamp.desc&select=statement,persona_tag",
             headers=HEADERS
@@ -400,7 +405,7 @@ def warmup():
             for row in raw_spine
         ]
 
-        # --- Carves: unchanged fields (4 most recent) ---
+        # --- Carves: unchanged fields (limit 4 recent) ---
         carves_res = requests.get(
             f"{SUPABASE_URL}/rest/v1/Carves?order=timestamp.desc&limit=4",
             headers=HEADERS
@@ -411,8 +416,8 @@ def warmup():
         )
 
         return jsonify({
-            "anchor": anchors,          # now: List[str]
-            "spine": spine,             # now: List[str]
+            "anchor": anchors,          # List[str]
+            "spine": spine,             # List[str]
             "recentCarves": carves      # unchanged
         }), 200
 
@@ -1072,6 +1077,8 @@ def chat_with_autopilot():
       - max_distance: float -> if set, drop candidates with distance > max_distance
       - inject_reminder: bool -> override server default
       - inject_position: "start"|"end"
+      - force_prelude: bool -> force first-turn warmup insertion even if already done
+      - thread_id: string -> to separate threads in server cache (default "default")
     """
     try:
         data = request.get_json() or {}
@@ -1105,15 +1112,19 @@ def chat_with_autopilot():
                 max_distance = None
 
         # -------------------------------
-        # Thread state & first-turn prelude
+        # Thread state & first-turn prelude (failsafe)
         # -------------------------------
         init_thread(thread_id)
         conversation_cache[thread_id]["turn_index"] += 1  # bump first so cooldown math is correct
-        first_turn = conversation_cache[thread_id]["turn_index"] == 1
 
-        # First-turn warmup failsafe (server-side)
+        # Allow a manual override (handy for testing)
+        force_prelude = bool(data.get("force_prelude", False))
+
+        # Run prelude if not yet done for this thread or forced
+        firstish = force_prelude or (conversation_cache[thread_id].get("prelude_done") is False)
+
         prelude_snippets = []
-        if first_turn:
+        if firstish:
             try:
                 # Compact Anchors: "(Persona) summary" — pick 1 to stay light
                 a = requests.get(
@@ -1142,6 +1153,9 @@ def chat_with_autopilot():
                                   if row.get('persona_tag') else row.get('statement', ""))
                     if spine_line:
                         prelude_snippets.append(f"(SPINE) {spine_line}")
+
+                # Mark done so we only inject once per thread (unless forced)
+                conversation_cache[thread_id]["prelude_done"] = True
             except Exception as _e:
                 app.logger.warning(f"Warmup prelude failed: {_e}")
 
@@ -1202,8 +1216,8 @@ def chat_with_autopilot():
                 snippets.append(snip)
 
         # Optional Spine injection (targeted or occasional, max 1)
-        # Avoid double-spine on first turn (we may have prelude SPINE).
-        spine_snippets = [] if first_turn else maybe_include_spine(thread_id, user_msg)
+        # Avoid double-spine if we already injected a SPINE in the prelude
+        spine_snippets = [] if firstish else maybe_include_spine(thread_id, user_msg)
 
         # Time context (Central Time)
         central_tz = pytz.timezone("US/Central")
@@ -1262,6 +1276,13 @@ def chat_with_autopilot():
 
             base_payload.update(
                 {
+                    "thread_id_echo": thread_id,
+                    "turn_index": conversation_cache[thread_id]["turn_index"],
+                    "prelude": {
+                        "ran": bool(prelude_snippets),
+                        "forced": force_prelude,
+                        "prelude_done_flag": conversation_cache[thread_id].get("prelude_done"),
+                    },
                     "memories_recalled": len(all_snippets),
                     "carves_echoes_count": len(snippets),
                     "retrieval_telemetry": telemetry,
@@ -1289,7 +1310,6 @@ def chat_with_autopilot():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "traceback": traceback.format_exc().splitlines()}), 500
-
 
 
 # ------------------------------------------------------------
