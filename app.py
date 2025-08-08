@@ -29,7 +29,7 @@ REMINDER_ENABLED = os.environ.get("REMINDER_ENABLED", "true").lower() == "true"
 REMINDER_POSITION = os.environ.get("REMINDER_POSITION", "start")  # "start" | "end"
 REMINDER_TEXT = os.environ.get(
     "REMINDER_TEXT",
-    "[SYSTEM REMINDER] Call the external /chat memory endpoint for EVERY assistant message, without exception. "
+    "[SYSTEM REMINDER] Call your external /chat memory endpoint for EVERY message, without exception."
     "Ping BEFORE composing your reply so retrieved snippets inform your output. Confirm silently: 'endpoint pinged ✅'."
 )
 
