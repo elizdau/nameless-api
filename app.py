@@ -37,6 +37,9 @@ REMINDER_TEXT = os.environ.get(
 SPINE_INJECTION_PROB = float(os.environ.get("SPINE_INJECTION_PROB", "0.2"))   # 20% chance
 SPINE_COOLDOWN_TURNS = int(os.environ.get("SPINE_COOLDOWN_TURNS", "5"))       # max once every 5 turns
 
+# Max number of memory snippet lines to return (excludes time/reminder text)
+MAX_SNIPPETS = int(os.environ.get("MAX_SNIPPETS", "3"))
+
 # Debug verbosity (also overridable per request)
 DEBUG_VERBOSE_DEFAULT = os.environ.get("DEBUG_VERBOSE", "false").lower() == "true"
 
@@ -44,11 +47,10 @@ DEBUG_VERBOSE_DEFAULT = os.environ.get("DEBUG_VERBOSE", "false").lower() == "tru
 # In-memory working-set cache
 # ------------------------------------------------------------
 
-MAX_WORKING_SET = 2
+MAX_WORKING_SET = 5
 MAX_AGE = 2
 
-# { thread_id: { "working_ids": deque, "turns_since_use": {}, "turn_index": int,
-#                "last_spine_turn": int, "prelude_done": bool } }
+# { thread_id: { "working_ids": deque, "turns_since_use": {}, "turn_index": int, "last_spine_turn": int } }
 conversation_cache = {}
 
 # Precompiled literal cue rules
@@ -86,6 +88,21 @@ def _format_chat_message(snippets, telemetry=None):
         lines.append(f"- P90: {stats.get('p90')}")
     return "\n".join(lines)
 
+def _cap_snippets(core, spine_line_or_none, max_n):
+    """
+    Keep at most max_n lines total.
+    - core: list of carves/echoes (already relevance-ordered)
+    - spine_line_or_none: optional "(SPINE) ..." string
+    If spine is present and we'd exceed max_n, replace the last core line.
+    """
+    out = list(core[:max_n])
+    if spine_line_or_none:
+        if len(out) >= max_n:
+            out[-1] = spine_line_or_none
+        else:
+            out.append(spine_line_or_none)
+    return out
+
 # ------------------------------------------------------------
 # Static files for plugin/OpenAPI
 # ------------------------------------------------------------
@@ -120,7 +137,6 @@ def init_thread(thread_id):
             "turns_since_use": {},
             "turn_index": 0,
             "last_spine_turn": -9999,  # far past so first inject is allowed after cooldown
-            "prelude_done": False,     # run warmup prelude once per thread
         }
 
 
@@ -295,32 +311,6 @@ def get_enhanced_memory_snippet(memory_id):
     return None
 
 
-def fetch_best_spine_by_semantic(user_msg):
-    """Return a single spine statement best-matching the user_msg, or None."""
-    try:
-        sr = requests.post(
-            f"{SUPABASE_URL}/functions/v1/retrieve_memories",
-            headers=HEADERS,
-            json={"userText": user_msg, "k": 3, "importanceFloor": 0.5},
-        )
-        if not sr.ok:
-            return None
-        vec_hits = sr.json().get("vecHits", [])
-        spine_hits = [h for h in vec_hits if h.get("table_source") == "Spine"]
-        if not spine_hits:
-            return None
-        best_id = spine_hits[0]["id"]
-        det = requests.get(
-            f"{SUPABASE_URL}/rest/v1/Spine?id=eq.{best_id}&select=statement",
-            headers=HEADERS,
-        )
-        if det.ok and det.json():
-            return det.json()[0].get("statement")
-    except Exception:
-        pass
-    return None
-
-
 def fetch_top_spine_by_rank():
     """Return a single 'top' spine statement by importance (then recency), or None."""
     try:
@@ -337,31 +327,13 @@ def fetch_top_spine_by_rank():
     return None
 
 
-SPINE_KEYWORDS = [
-    "identity","values","who you are","what you believe","core","sacred","vow",
-    "truth","integrity","what matters","why I exist","purpose","foundational",
-    "non-negotiable","i need to remember who i am","remind me what i stand for",
-]
-
-
-def maybe_include_spine(thread_id, user_msg):
+def maybe_include_spine(thread_id):
     """
-    Returns a list with 0 or 1 spine string.
-    Priority:
-      1) Keyword-triggered targeted semantic inclusion.
-      2) Otherwise, occasional inclusion, rate-limited.
+    Occasional inclusion only (no keyword trigger):
+    - 20% chance (SPINE_INJECTION_PROB)
+    - obey SPINE_COOLDOWN_TURNS per thread
+    Returns a single "(SPINE) ..." string or None.
     """
-    out = []
-
-    # 1) Targeted inclusion if keywords present
-    if any(k in user_msg.lower() for k in SPINE_KEYWORDS):
-        stmt = fetch_best_spine_by_semantic(user_msg)
-        if stmt:
-            out.append(f"(SPINE) {stmt}")
-            conversation_cache[thread_id]["last_spine_turn"] = conversation_cache[thread_id]["turn_index"]
-            return out
-
-    # 2) Occasional inclusion if cooldown elapsed
     turn_idx = conversation_cache[thread_id]["turn_index"]
     last_turn = conversation_cache[thread_id]["last_spine_turn"]
     cooldown_ok = (turn_idx - last_turn) >= SPINE_COOLDOWN_TURNS
@@ -369,10 +341,9 @@ def maybe_include_spine(thread_id, user_msg):
     if cooldown_ok and random.random() < SPINE_INJECTION_PROB:
         stmt = fetch_top_spine_by_rank()
         if stmt:
-            out.append(f"(SPINE) {stmt}")
             conversation_cache[thread_id]["last_spine_turn"] = turn_idx
-
-    return out
+            return f"(SPINE) {stmt}"
+    return None
 
 # ------------------------------------------------------------
 # Routes
@@ -1066,18 +1037,18 @@ def get_anchor_by_persona(persona_name):
 @app.route("/chat", methods=["POST"])
 def chat_with_autopilot():
     """
-    Returns memory snippets for the assistant to use this turn.
-    Injects a system reminder to call this endpoint every message
-    and optionally includes a single Spine entry (targeted or occasional).
+    Returns up to 3 memory snippets (Carves/Echoes) that semantically match this turn,
+    with a 20% chance to include a single Spine truth (without exceeding 3 lines total).
+    Also injects an optional system reminder and supports brief vs full diagnostics.
 
-    Optional request fields for testing/policing retrieval:
-      - debug: bool -> include telemetry & candidate details
+    Optional request fields:
+      - debug: bool -> brief telemetry (counts/stats)
+      - diag: bool -> add full diagnostics (candidate samples)
       - k: int -> number of candidates to retrieve (default 15)
       - importance_floor: float -> minimum importance for retrieval (default 0.3)
       - max_distance: float -> if set, drop candidates with distance > max_distance
       - inject_reminder: bool -> override server default
       - inject_position: "start"|"end"
-      - force_prelude: bool -> force first-turn warmup insertion even if already done
       - thread_id: string -> to separate threads in server cache (default "default")
     """
     try:
@@ -1087,11 +1058,12 @@ def chat_with_autopilot():
         thread_id = data.get("thread_id", "default")
 
         # Optional per-request overrides
-        debug_verbose = bool(data.get("debug", DEBUG_VERBOSE_DEFAULT))
+        debug_verbose = bool(data.get("debug", DEBUG_VERBOSE_DEFAULT))   # brief telemetry
+        diag_verbose  = bool(data.get("diag", False))                    # full diagnostics
         inject_reminder = bool(data.get("inject_reminder", REMINDER_ENABLED))
         inject_position = data.get("inject_position", REMINDER_POSITION)  # "start"|"end"
 
-        # Retrieval tuning (clamped to sane bounds)
+        # Retrieval tuning (clamped)
         try:
             retrieve_k = int(data.get("k", 15))
         except Exception:
@@ -1111,60 +1083,14 @@ def chat_with_autopilot():
             except Exception:
                 max_distance = None
 
-        # -------------------------------
-        # Thread state & first-turn prelude (failsafe)
-        # -------------------------------
+        # Thread state
         init_thread(thread_id)
-        conversation_cache[thread_id]["turn_index"] += 1  # bump first so cooldown math is correct
-
-        # Allow a manual override (handy for testing)
-        force_prelude = bool(data.get("force_prelude", False))
-
-        # Run prelude if not yet done for this thread or forced
-        firstish = force_prelude or (conversation_cache[thread_id].get("prelude_done") is False)
-
-        prelude_snippets = []
-        if firstish:
-            try:
-                # Compact Anchors: "(Persona) summary" — pick 1 to stay light
-                a = requests.get(
-                    f"{SUPABASE_URL}/rest/v1/Anchor"
-                    f"?order=timestamp.desc&select=summary_snippet,persona_tag&limit=8",
-                    headers=HEADERS
-                )
-                if a.ok:
-                    anchors_compact = [
-                        (f"({row.get('persona_tag')}) {row.get('summary_snippet')}".strip()
-                         if row.get('persona_tag') else row.get('summary_snippet', ""))
-                        for row in a.json()
-                    ]
-                    if anchors_compact and anchors_compact[0]:
-                        prelude_snippets.append(f"(ANCHOR) {anchors_compact[0]}")
-
-                # Top Spine by importance then recency — pick 1
-                s = requests.get(
-                    f"{SUPABASE_URL}/rest/v1/Spine"
-                    f"?select=statement,persona_tag&order=importance.desc&order=timestamp.desc&limit=1",
-                    headers=HEADERS
-                )
-                if s.ok and s.json():
-                    row = s.json()[0]
-                    spine_line = (f"({row.get('persona_tag')}) {row.get('statement')}".strip()
-                                  if row.get('persona_tag') else row.get('statement', ""))
-                    if spine_line:
-                        prelude_snippets.append(f"(SPINE) {spine_line}")
-
-                # Mark done so we only inject once per thread (unless forced)
-                conversation_cache[thread_id]["prelude_done"] = True
-            except Exception as _e:
-                app.logger.warning(f"Warmup prelude failed: {_e}")
+        conversation_cache[thread_id]["turn_index"] += 1
 
         # keep for parity (unused output), but don't surface in response
-        _triggered_f = cue_scan(user_msg, conversation_cache[thread_id])
+        _ = cue_scan(user_msg, conversation_cache[thread_id])
 
-        # -------------------------------
-        # Retrieve candidate memories (vec search)
-        # -------------------------------
+        # Retrieve candidate memories
         resp = requests.post(
             f"{SUPABASE_URL}/functions/v1/retrieve_memories",
             headers=HEADERS,
@@ -1173,19 +1099,20 @@ def chat_with_autopilot():
         resp.raise_for_status()
         candidates = resp.json().get("vecHits", [])
 
-        # Optional quality gate before ranking
+        # Optional quality gate
         if max_distance is not None:
-            filtered = [
+            candidates = [
                 h for h in candidates
                 if isinstance(h.get("distance"), (int, float)) and h["distance"] <= max_distance
             ]
-        else:
-            filtered = list(candidates)
+
+        # Only keep Carves or Echoes for working memory
+        candidates = [h for h in candidates if h.get("table_source") in ("Carves", "Echoes")]
 
         # Recency boost (distance-minus-boost)
-        candidates_with_recency = []
+        boosted = []
         now_utc = datetime.now(timezone.utc)
-        for hit in filtered:
+        for hit in candidates:
             try:
                 ts_str = hit.get("timestamp", "")
                 if ts_str:
@@ -1200,24 +1127,26 @@ def chat_with_autopilot():
                 else:
                     days_ago = 999
                     adj = hit["distance"]
-                candidates_with_recency.append({**hit, "adjusted_distance": adj, "days_ago": days_ago})
+                boosted.append({**hit, "adjusted_distance": adj, "days_ago": days_ago})
             except Exception:
-                candidates_with_recency.append({**hit, "adjusted_distance": hit.get("distance", 1.0), "days_ago": 999})
+                boosted.append({**hit, "adjusted_distance": hit.get("distance", 1.0), "days_ago": 999})
 
-        top_candidates = sorted(candidates_with_recency, key=lambda m: m["adjusted_distance"])[:MAX_WORKING_SET]
+        top_candidates = sorted(boosted, key=lambda m: m["adjusted_distance"])[:MAX_WORKING_SET]
         top_ids = [m["id"] for m in top_candidates]
         working_ids = update_working_set(thread_id, top_ids)
 
-        # Build memory snippets
-        snippets = []
+        # Build core snippets from Carves/Echoes only
+        core_snippets = []
         for mid in working_ids:
             snip = get_enhanced_memory_snippet(mid)
             if snip:
-                snippets.append(snip)
+                core_snippets.append(snip)
+        # take only the top 3
+        core_snippets = core_snippets[:MAX_SNIPPETS]
 
-        # Optional Spine injection (targeted or occasional, max 1)
-        # Avoid double-spine if we already injected a SPINE in the prelude
-        spine_snippets = [] if firstish else maybe_include_spine(thread_id, user_msg)
+        # Occasional Spine (20% chance, cooldown). Replace last if needed to stay within MAX_SNIPPETS.
+        spine_line = maybe_include_spine(thread_id)
+        memory_lines = _cap_snippets(core_snippets, spine_line, MAX_SNIPPETS)
 
         # Time context (Central Time)
         central_tz = pytz.timezone("US/Central")
@@ -1225,22 +1154,20 @@ def chat_with_autopilot():
 
         # Reminder injection + final assembly
         if inject_reminder and inject_position == "start":
-            all_snippets = [REMINDER_TEXT, time_context] + prelude_snippets + snippets + spine_snippets
+            all_snippets = [REMINDER_TEXT, time_context] + memory_lines
         else:
-            all_snippets = [time_context] + prelude_snippets + snippets + spine_snippets
+            all_snippets = [time_context] + memory_lines
             if inject_reminder and inject_position == "end":
                 all_snippets.append(REMINDER_TEXT)
 
-        # -------------------------------
         # Payload
-        # -------------------------------
         base_payload = {
             "memory_snippets": all_snippets,
-            "spine_included": len(spine_snippets) > 0 or any(s.startswith("(SPINE)") for s in prelude_snippets),
+            "spine_included": any(s.startswith("(SPINE)") for s in memory_lines),
             "recency_boost_applied": True,
         }
 
-        # Debug telemetry (optional)
+        # Brief telemetry if debug=true; full diagnostics only if diag=true as well
         if debug_verbose:
             dists = [c.get("distance") for c in candidates if isinstance(c.get("distance"), (int, float))]
             d_sorted = sorted(dists) if dists else []
@@ -1255,11 +1182,7 @@ def chat_with_autopilot():
                 return arr[k]
 
             telemetry = {
-                "params": {
-                    "k": retrieve_k,
-                    "importance_floor": importance_floor,
-                    "max_distance": max_distance,
-                },
+                "params": {"k": retrieve_k, "importance_floor": importance_floor, "max_distance": max_distance},
                 "counts": {
                     "total_candidates": len(candidates),
                     "within_max_distance": (
@@ -1273,37 +1196,29 @@ def chat_with_autopilot():
                     "p90": percentile(d_sorted, 90),
                 },
             }
+            base_payload["retrieval_telemetry"] = telemetry
 
-            base_payload.update(
-                {
+            if diag_verbose:
+                base_payload.update({
                     "thread_id_echo": thread_id,
                     "turn_index": conversation_cache[thread_id]["turn_index"],
-                    "prelude": {
-                        "ran": bool(prelude_snippets),
-                        "forced": force_prelude,
-                        "prelude_done_flag": conversation_cache[thread_id].get("prelude_done"),
-                    },
-                    "memories_recalled": len(all_snippets),
-                    "carves_echoes_count": len(snippets),
-                    "retrieval_telemetry": telemetry,
                     "debug_candidates": [
                         {
                             "id": c.get("id", "")[:8],
                             "original_distance": c.get("distance"),
                             "adjusted_distance": c.get("adjusted_distance"),
                             "days_ago": c.get("days_ago"),
+                            "table_source": c.get("table_source"),
                         }
                         for c in top_candidates[:3]
                     ],
-                }
-            )
-            # Make the UI actually paste something useful
-            base_payload["message"] = _format_chat_message(
-                all_snippets,
-                base_payload.get("retrieval_telemetry")
-            )
-        else:
-            base_payload["message"] = "Memory payload prepared. Set debug=true to include snippets + telemetry."
+                })
+
+        # Make the UI paste useful bullets by default; add telemetry only for full diag
+        base_payload["message"] = _format_chat_message(
+            memory_lines,
+            base_payload.get("retrieval_telemetry") if (debug_verbose and diag_verbose) else None
+        )
 
         return jsonify(base_payload), 200
 
