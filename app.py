@@ -44,7 +44,7 @@ DEBUG_VERBOSE_DEFAULT = os.environ.get("DEBUG_VERBOSE", "false").lower() == "tru
 # In-memory working-set cache
 # ------------------------------------------------------------
 
-MAX_WORKING_SET = 5
+MAX_WORKING_SET = 2
 MAX_AGE = 2
 
 # { thread_id: { "working_ids": deque, "turns_since_use": {}, "turn_index": int,
