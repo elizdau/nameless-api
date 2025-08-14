@@ -20,6 +20,13 @@ HEADERS = {
 client = OpenAI()  # uses OPENAI_API_KEY
 
 # ── Which text to use per table (fallback order) ───────────────────────────────
+import os, sys
+if os.getenv("SUPABASE_PRIV_KEY"):
+    print("DEBUG: SUPABASE_PRIV_KEY present in env")
+else:
+    print("DEBUG: SUPABASE_PRIV_KEY NOT present in env", file=sys.stderr); sys.exit(1)
+
+
 TBL_CONFIG = {
     "Carves": {
         "fields": ["summary_snippet", "summary", "title", "closing"],
