@@ -581,6 +581,11 @@ def create_carve():
         app.logger.exception(f"[RID {rid}] /carves exception: {e}")
         return jsonify({"error": "Failed to create carve", "details": str(e)}), 500
 
+@app.route('/test-post', methods=['POST'])
+def test_post():
+    app.logger.info("TEST POST ENDPOINT HIT!")
+    print("TEST POST ENDPOINT HIT!")
+    return {"success": True, "message": "Test post worked!"}
 
 @app.route("/carves/search", methods=["GET"])
 def search_carves():
