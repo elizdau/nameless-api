@@ -409,7 +409,7 @@ def warmup():
         # --- Spine: statement only (no embeddings) ---
         spine_qs = (
             f"{SUPABASE_URL}/rest/v1/Spine"
-            f"?select=id=timestamp,statement,persona_tag,emotag"
+            f"?select=timestamp,statement,persona_tag,emotag"
             f"&order=timestamp.desc&limit={WARMUP_MAX_SPINE}"
         )
         spine_res = requests.get(spine_qs, headers=HEADERS, timeout=TIMEOUT)
