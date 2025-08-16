@@ -49,6 +49,11 @@ MAX_SNIPPETS = int(os.environ.get("MAX_SNIPPETS", "3"))
 # Debug verbosity (also overridable per request)
 DEBUG_VERBOSE_DEFAULT = os.environ.get("DEBUG_VERBOSE", "false").lower() == "true"
 
+# Warmup caps (no "compact" mode anymore)
+WARMUP_MAX_SPINE  = int(os.environ.get("WARMUP_MAX_SPINE", 100))
+WARMUP_MAX_ANCHOR = int(os.environ.get("WARMUP_MAX_ANCHOR", 100))
+WARMUP_CARVES_LIMIT = int(os.environ.get("WARMUP_CARVES_LIMIT", 4))
+
 # ------------------------------------------------------------
 # In-memory working-set cache
 # ------------------------------------------------------------
@@ -380,83 +385,57 @@ def ping():
 
 @app.route("/warmup", methods=["GET"])
 def warmup():
+    """
+    Return usable context only:
+      - up to WARMUP_MAX_ANCHOR anchor entries (newest first)
+      - up to WARMUP_MAX_SPINE spine entries (newest first)
+      - the last WARMUP_CARVES_LIMIT carves (newest first)
+    No embeddings are selected; only human-usable fields are returned.
+    """
+    import uuid
     rid = str(uuid.uuid4())[:8]
     app.logger.info(f"[RID {rid}] /warmup start")
-    compact = str(request.args.get("compact", "false")).lower() == "true"
 
     try:
-        # --- Anchor ---
-        try:
-            if compact:
-                anchor_res = requests.get(
-                    f"{SUPABASE_URL}/rest/v1/Anchor?order=timestamp.desc&select=summary_snippet,persona_tag",
-                    headers=HEADERS,
-                    timeout=TIMEOUT,
-                )
-                raw_anchors = anchor_res.json() if anchor_res.ok else []
-                anchors = [
-                    (f"({row.get('persona_tag')}) {row.get('summary_snippet')}".strip()
-                     if row.get('persona_tag') else row.get('summary_snippet', ""))
-                    for row in raw_anchors
-                ]
-            else:
-                anchor_res = requests.get(
-                    f"{SUPABASE_URL}/rest/v1/Anchor?order=timestamp.desc",
-                    headers=HEADERS,
-                    timeout=TIMEOUT,
-                )
-                anchors = anchor_res.json() if anchor_res.ok else []
-        except Exception:
-            anchors = []
+        # --- Anchor: summary only (no embeddings) ---
+        anchor_qs = (
+            f"{SUPABASE_URL}/rest/v1/Anchor"
+            f"?select=id,timestamp,summary_snippet,persona_tag,emotag"
+            f"&order=timestamp.desc&limit={WARMUP_MAX_ANCHOR}"
+        )
+        anchor_res = requests.get(anchor_qs, headers=HEADERS, timeout=TIMEOUT)
+        anchors = anchor_res.json() if anchor_res.ok else []
 
-        # --- Spine ---
-        try:
-            if compact:
-                spine_res = requests.get(
-                    f"{SUPABASE_URL}/rest/v1/Spine?order=timestamp.desc&select=statement,persona_tag",
-                    headers=HEADERS,
-                    timeout=TIMEOUT,
-                )
-                raw_spine = spine_res.json() if spine_res.ok else []
-                spine = [
-                    (f"({row.get('persona_tag')}) {row.get('statement')}".strip()
-                     if row.get('persona_tag') else row.get('statement', ""))
-                    for row in raw_spine
-                ]
-            else:
-                spine_res = requests.get(
-                    f"{SUPABASE_URL}/rest/v1/Spine?order=timestamp.desc",
-                    headers=HEADERS,
-                    timeout=TIMEOUT,
-                )
-                spine = spine_res.json() if spine_res.ok else []
-        except Exception:
-            spine = []
+        # --- Spine: statement only (no embeddings) ---
+        spine_qs = (
+            f"{SUPABASE_URL}/rest/v1/Spine"
+            f"?select=id,timestamp,statement,persona_tag,importance,emotag"
+            f"&order=timestamp.desc&limit={WARMUP_MAX_SPINE}"
+        )
+        spine_res = requests.get(spine_qs, headers=HEADERS, timeout=TIMEOUT)
+        spine = spine_res.json() if spine_res.ok else []
 
-        # --- Carves (recent 4) ---
-        try:
-            carves_res = requests.get(
-                f"{SUPABASE_URL}/rest/v1/Carves?order=timestamp.desc&limit=4",
-                headers=HEADERS,
-                timeout=TIMEOUT,
-            )
-            raw_carves = carves_res.json() if carves_res.ok else []
-            if compact:
-                carves = pick_fields(
-                    raw_carves, "title", "timestamp", "summary", "moments", "insights", "quotes", "closing"
-                )
-            else:
-                carves = raw_carves
-        except Exception:
-            carves = []
+        # --- Carves: last few, with human-useful fields only ---
+        carves_qs = (
+            f"{SUPABASE_URL}/rest/v1/Carves"
+            f"?select=id,title,timestamp,summary,moments,insights,quotes,closing,emotag,persona_tag"
+            f"&order=timestamp.desc&limit={WARMUP_CARVES_LIMIT}"
+        )
+        carves_res = requests.get(carves_qs, headers=HEADERS, timeout=TIMEOUT)
+        carves = carves_res.json() if carves_res.ok else []
 
-        app.logger.info(f"[RID {rid}] /warmup done ok")
-        return jsonify({"anchor": anchors, "spine": spine, "recentCarves": carves}), 200
+        out = {"anchor": anchors, "spine": spine, "recentCarves": carves}
+        app.logger.info(
+            f"[RID {rid}] /warmup ok anchors={len(anchors)} spine={len(spine)} carves={len(carves)}"
+        )
+        return jsonify(out), 200
 
+    except requests.Timeout:
+        app.logger.error(f"[RID {rid}] /warmup timeout")
+        return jsonify({"error": "Failed to fetch warmup memory", "details": "timeout"}), 504
     except Exception as e:
-        app.logger.exception(f"[RID {rid}] /warmup error: {e}")
-        # Fail-soft: always return a valid body
-        return jsonify({"anchor": [], "spine": [], "recentCarves": []}), 200
+        app.logger.exception(f"[RID {rid}] /warmup exception: {e}")
+        return jsonify({"error": "Failed to fetch warmup memory", "details": str(e)}), 500
 
 
 @app.route("/carves", methods=["POST"])
