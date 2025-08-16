@@ -166,7 +166,8 @@ def update_working_set(thread_id, new_ids):
             cache["working_ids"].append(mid)
             cache["turns_since_use"][mid] = 0
 
-    return list(cache["working_ids"])()
+    return list(cache["working_ids"])
+
 
 
 def cue_scan(user_message, _thread_context):
