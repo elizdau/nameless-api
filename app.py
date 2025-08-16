@@ -400,7 +400,7 @@ def warmup():
         # --- Anchor: summary only (no embeddings) ---
         anchor_qs = (
             f"{SUPABASE_URL}/rest/v1/Anchor"
-            f"?select=id,timestamp,summary_snippet,persona_tag,emotag"
+            f"?select=summary_snippet,persona_tag,emotag"
             f"&order=timestamp.desc&limit={WARMUP_MAX_ANCHOR}"
         )
         anchor_res = requests.get(anchor_qs, headers=HEADERS, timeout=TIMEOUT)
@@ -409,7 +409,7 @@ def warmup():
         # --- Spine: statement only (no embeddings) ---
         spine_qs = (
             f"{SUPABASE_URL}/rest/v1/Spine"
-            f"?select=id,timestamp,statement,persona_tag,importance,emotag"
+            f"?select=id=timestamp,statement,persona_tag,emotag"
             f"&order=timestamp.desc&limit={WARMUP_MAX_SPINE}"
         )
         spine_res = requests.get(spine_qs, headers=HEADERS, timeout=TIMEOUT)
@@ -418,7 +418,7 @@ def warmup():
         # --- Carves: last few, with human-useful fields only ---
         carves_qs = (
             f"{SUPABASE_URL}/rest/v1/Carves"
-            f"?select=id,title,timestamp,summary,moments,insights,quotes,closing,emotag,persona_tag"
+            f"?select=title,timestamp,summary,moments,insights,quotes,closing,emotag,persona_tag"
             f"&order=timestamp.desc&limit={WARMUP_CARVES_LIMIT}"
         )
         carves_res = requests.get(carves_qs, headers=HEADERS, timeout=TIMEOUT)
