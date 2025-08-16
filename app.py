@@ -4,29 +4,30 @@ import uuid
 import random
 from collections import deque
 from datetime import datetime, timezone
-
 import openai
 import pytz
 import requests
 from flask import Flask, jsonify, request, send_from_directory
-
 import sys, logging
+
+# Create the Flask app FIRST
+app = Flask(__name__)
+
+# THEN configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     handlers=[logging.StreamHandler(sys.stdout)]
 )
-app.logger.setLevel(logging.INFO)
+app.logger.setLevel(logging.INFO)  # <- Now app exists!
 logging.getLogger("werkzeug").setLevel(logging.INFO)
 
 # ------------------------------------------------------------
 # Config
 # ------------------------------------------------------------
-
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
 openai.api_key = os.environ.get("OPENAI_API_KEY")
-
 HEADERS = {
     "apikey": SUPABASE_API_KEY,
     "Authorization": f"Bearer {SUPABASE_API_KEY}",
