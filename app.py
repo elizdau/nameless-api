@@ -1,5 +1,6 @@
 import os
 import re
+import uuid
 import random
 from collections import deque
 from datetime import datetime, timezone
@@ -23,6 +24,11 @@ HEADERS = {
     "Content-Type": "application/json",
     "Prefer": "return=representation",
 }
+
+# ---- HTTP timeouts (connector-friendly) ----
+CONNECT_TO = float(os.environ.get("CONNECT_TIMEOUT_S", "2.5"))
+READ_TO = float(os.environ.get("READ_TIMEOUT_S", "7.5"))
+TIMEOUT = (CONNECT_TO, READ_TO)  # (connect, read)
 
 # ---- Chat endpoint behavior toggles ----
 REMINDER_ENABLED = os.environ.get("REMINDER_ENABLED", "true").lower() == "true"
@@ -87,6 +93,7 @@ def _format_chat_message(snippets, telemetry=None):
         lines.append(f"- Median: {stats.get('median')}")
         lines.append(f"- P90: {stats.get('p90')}")
     return "\n".join(lines)
+
 
 def _cap_snippets(core, spine_line_or_none, max_n):
     """
@@ -159,7 +166,7 @@ def update_working_set(thread_id, new_ids):
             cache["working_ids"].append(mid)
             cache["turns_since_use"][mid] = 0
 
-    return list(cache["working_ids"])
+    return list(cache["working_ids"])()
 
 
 def cue_scan(user_message, _thread_context):
@@ -266,13 +273,19 @@ def get_enhanced_memory_snippet(memory_id):
     """
     Prefer Carves dual summaries; fall back to Echoes.
     """
-    r = requests.get(
-        f"{SUPABASE_URL}/rest/v1/Carves?id=eq.{memory_id}&select=title,factual_summary,tonal_snippet,summary_snippet",
-        headers=HEADERS,
-    ).json()
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/Carves?id=eq.{memory_id}&select=title,factual_summary,tonal_snippet,summary_snippet",
+            headers=HEADERS,
+            timeout=TIMEOUT,
+        )
+        r.raise_for_status()
+        data = r.json()
+    except Exception:
+        data = []
 
-    if r:
-        carve = r[0]
+    if data:
+        carve = data[0]
         title = carve.get("title", "Untitled")
         factual = carve.get("factual_summary")
         tonal = carve.get("tonal_snippet")
@@ -288,13 +301,19 @@ def get_enhanced_memory_snippet(memory_id):
             snippet = f"[CARVE: {title}] {fallback}"
         return snippet
 
-    r = requests.get(
-        f"{SUPABASE_URL}/rest/v1/Echoes?id=eq.{memory_id}&select=summary_snippet,tags,persona_tag,source",
-        headers=HEADERS,
-    ).json()
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/Echoes?id=eq.{memory_id}&select=summary_snippet,tags,persona_tag,source",
+            headers=HEADERS,
+            timeout=TIMEOUT,
+        )
+        r.raise_for_status()
+        data = r.json()
+    except Exception:
+        data = []
 
-    if r:
-        echo = r[0]
+    if data:
+        echo = data[0]
         tags_str = ", ".join(echo.get("tags", [])) if echo.get("tags") else "no tags"
         persona = echo.get("persona_tag", "")
         source = echo.get("source", "")
@@ -319,6 +338,7 @@ def fetch_top_spine_by_rank():
             f"?select=statement"
             f"&order=importance.desc&order=timestamp.desc&limit=1",
             headers=HEADERS,
+            timeout=TIMEOUT,
         )
         if resp.ok and resp.json():
             return resp.json()[0].get("statement")
@@ -346,61 +366,102 @@ def maybe_include_spine(thread_id):
     return None
 
 # ------------------------------------------------------------
+# Health / diagnostics
+# ------------------------------------------------------------
+
+@app.route("/ping", methods=["GET"])
+def ping():
+    return jsonify({"ok": True, "ts": datetime.now(timezone.utc).isoformat()}), 200
+
+# ------------------------------------------------------------
 # Routes
 # ------------------------------------------------------------
 
 @app.route("/warmup", methods=["GET"])
 def warmup():
+    rid = str(uuid.uuid4())[:8]
+    app.logger.info(f"[RID {rid}] /warmup start")
+    compact = str(request.args.get("compact", "false")).lower() == "true"
+
     try:
-        # --- Anchor: compact strings "(Persona) summary" (no limit) ---
-        anchor_res = requests.get(
-            f"{SUPABASE_URL}/rest/v1/Anchor?order=timestamp.desc&select=summary_snippet,persona_tag",
-            headers=HEADERS
-        )
-        raw_anchors = anchor_res.json() if anchor_res.ok else []
-        anchors = [
-            (f"({row.get('persona_tag')}) {row.get('summary_snippet')}".strip()
-             if row.get('persona_tag') else row.get('summary_snippet', ""))
-            for row in raw_anchors
-        ]
+        # --- Anchor ---
+        try:
+            if compact:
+                anchor_res = requests.get(
+                    f"{SUPABASE_URL}/rest/v1/Anchor?order=timestamp.desc&select=summary_snippet,persona_tag",
+                    headers=HEADERS,
+                    timeout=TIMEOUT,
+                )
+                raw_anchors = anchor_res.json() if anchor_res.ok else []
+                anchors = [
+                    (f"({row.get('persona_tag')}) {row.get('summary_snippet')}".strip()
+                     if row.get('persona_tag') else row.get('summary_snippet', ""))
+                    for row in raw_anchors
+                ]
+            else:
+                anchor_res = requests.get(
+                    f"{SUPABASE_URL}/rest/v1/Anchor?order=timestamp.desc",
+                    headers=HEADERS,
+                    timeout=TIMEOUT,
+                )
+                anchors = anchor_res.json() if anchor_res.ok else []
+        except Exception:
+            anchors = []
 
-        # --- Spine: compact strings "(Persona) statement" (no limit) ---
-        spine_res = requests.get(
-            f"{SUPABASE_URL}/rest/v1/Spine?order=timestamp.desc&select=statement,persona_tag",
-            headers=HEADERS
-        )
-        raw_spine = spine_res.json() if spine_res.ok else []
-        spine = [
-            (f"({row.get('persona_tag')}) {row.get('statement')}".strip()
-             if row.get('persona_tag') else row.get('statement', ""))
-            for row in raw_spine
-        ]
+        # --- Spine ---
+        try:
+            if compact:
+                spine_res = requests.get(
+                    f"{SUPABASE_URL}/rest/v1/Spine?order=timestamp.desc&select=statement,persona_tag",
+                    headers=HEADERS,
+                    timeout=TIMEOUT,
+                )
+                raw_spine = spine_res.json() if spine_res.ok else []
+                spine = [
+                    (f"({row.get('persona_tag')}) {row.get('statement')}".strip()
+                     if row.get('persona_tag') else row.get('statement', ""))
+                    for row in raw_spine
+                ]
+            else:
+                spine_res = requests.get(
+                    f"{SUPABASE_URL}/rest/v1/Spine?order=timestamp.desc",
+                    headers=HEADERS,
+                    timeout=TIMEOUT,
+                )
+                spine = spine_res.json() if spine_res.ok else []
+        except Exception:
+            spine = []
 
-        # --- Carves: unchanged fields (limit 4 recent) ---
-        carves_res = requests.get(
-            f"{SUPABASE_URL}/rest/v1/Carves?order=timestamp.desc&limit=4",
-            headers=HEADERS
-        )
-        raw_carves = carves_res.json() if carves_res.ok else []
-        carves = pick_fields(
-            raw_carves, "title", "timestamp", "summary", "moments", "insights", "quotes", "closing"
-        )
+        # --- Carves (recent 4) ---
+        try:
+            carves_res = requests.get(
+                f"{SUPABASE_URL}/rest/v1/Carves?order=timestamp.desc&limit=4",
+                headers=HEADERS,
+                timeout=TIMEOUT,
+            )
+            raw_carves = carves_res.json() if carves_res.ok else []
+            if compact:
+                carves = pick_fields(
+                    raw_carves, "title", "timestamp", "summary", "moments", "insights", "quotes", "closing"
+                )
+            else:
+                carves = raw_carves
+        except Exception:
+            carves = []
 
-        return jsonify({
-            "anchor": anchors,          # List[str]
-            "spine": spine,             # List[str]
-            "recentCarves": carves      # unchanged
-        }), 200
+        app.logger.info(f"[RID {rid}] /warmup done ok")
+        return jsonify({"anchor": anchors, "spine": spine, "recentCarves": carves}), 200
 
     except Exception as e:
-        return jsonify({"error": "Failed to fetch warmup memory", "details": str(e)}), 500
+        app.logger.exception(f"[RID {rid}] /warmup error: {e}")
+        # Fail-soft: always return a valid body
+        return jsonify({"anchor": [], "spine": [], "recentCarves": []}), 200
 
 
 @app.route("/carves", methods=["POST"])
 def create_carve():
-    """
-    Create a carve (requires factual_summary and tonal_snippet).
-    """
+    rid = str(uuid.uuid4())[:8]
+    app.logger.info(f"[RID {rid}] /carves start")
     try:
         data = request.get_json(force=True)
 
@@ -428,6 +489,7 @@ def create_carve():
                 missing.append(field_name)
 
         if missing:
+            app.logger.warning(f"[RID {rid}] /carves missing fields: {missing}")
             return (
                 jsonify(
                     {
@@ -445,6 +507,7 @@ def create_carve():
         if len(tonal_snippet) > 600:
             errors.append("tonal_snippet exceeds 150 tokens (~600 characters)")
         if errors:
+            app.logger.warning(f"[RID {rid}] /carves validation: {errors}")
             return (
                 jsonify(
                     {
@@ -480,8 +543,9 @@ def create_carve():
             "theme_tags": data.get("theme_tags"),
         }
 
-        response = requests.post(f"{SUPABASE_URL}/rest/v1/Carves", headers=HEADERS, json=carve_data)
+        response = requests.post(f"{SUPABASE_URL}/rest/v1/Carves", headers=HEADERS, json=carve_data, timeout=TIMEOUT)
         if not response.ok:
+            app.logger.error(f"[RID {rid}] /carves supabase error: {response.text}")
             return jsonify({"error": "Failed to create carve", "details": response.text}), 500
 
         carve_response = response.json()
@@ -500,23 +564,25 @@ def create_carve():
                         "emotag": data.get("emotag"),
                         "persona_tag": data.get("persona_tag"),
                     }
-                    echo_res = requests.post(f"{SUPABASE_URL}/rest/v1/Echoes", headers=HEADERS, json=echo_payload)
+                    echo_res = requests.post(f"{SUPABASE_URL}/rest/v1/Echoes", headers=HEADERS, json=echo_payload, timeout=TIMEOUT)
                     if echo_res.ok:
                         carve_response[0]["echo_suggested"] = True
                         carve_response[0]["suggested_echo"] = quote
                     break
 
+        app.logger.info(f"[RID {rid}] /carves done ok")
         return jsonify(carve_response), 201
 
     except Exception as e:
+        app.logger.exception(f"[RID {rid}] /carves exception: {e}")
         return jsonify({"error": "Failed to create carve", "details": str(e)}), 500
 
 
 @app.route("/carves/search", methods=["GET"])
 def search_carves():
-    """
-    Title-priority search, then semantic/literal.
-    """
+    rid = str(uuid.uuid4())[:8]
+    app.logger.info(f"[RID {rid}] /carves/search start")
+
     query = request.args.get("query")
     limit = int(request.args.get("limit", 10))
     importance_floor = float(request.args.get("importance_floor", 0.4))
@@ -532,48 +598,56 @@ def search_carves():
         title_results = []
         query_lower = query.lower().strip()
 
-        title_response = requests.get(
-            f"{SUPABASE_URL}/rest/v1/Carves?select=id,title,summary,quotes,moments,insights,closing,importance,timestamp,emotag&importance=gte.{importance_floor}",
-            headers=HEADERS,
-        )
-
-        if title_response.ok:
-            all_carves = title_response.json()
-            for carve in all_carves:
-                title = carve.get("title", "").lower()
-                if title == query_lower:
-                    title_results.append(
-                        {
-                            "id": carve["id"],
-                            "distance": 0.0,
-                            "match_type": "exact_title",
-                            "match_content": f"Exact title match: {carve['title']}",
-                            "carve": carve,
-                        }
-                    )
-                elif query_lower in title and len(query_lower) > 3:
-                    title_results.append(
-                        {
-                            "id": carve["id"],
-                            "distance": 0.1,
-                            "match_type": "partial_title",
-                            "match_content": f"Title contains: {carve['title']}",
-                            "carve": carve,
-                        }
-                    )
+        try:
+            title_response = requests.get(
+                f"{SUPABASE_URL}/rest/v1/Carves?select=id,title,summary,quotes,moments,insights,closing,importance,timestamp,emotag&importance=gte.{importance_floor}",
+                headers=HEADERS,
+                timeout=TIMEOUT,
+            )
+            if title_response.ok:
+                all_carves = title_response.json()
+                for carve in all_carves:
+                    title = carve.get("title", "").lower()
+                    if title == query_lower:
+                        title_results.append(
+                            {
+                                "id": carve["id"],
+                                "distance": 0.0,
+                                "match_type": "exact_title",
+                                "match_content": f"Exact title match: {carve['title']}",
+                                "carve": carve,
+                            }
+                        )
+                    elif query_lower in title and len(query_lower) > 3:
+                        title_results.append(
+                            {
+                                "id": carve["id"],
+                                "distance": 0.1,
+                                "match_type": "partial_title",
+                                "match_content": f"Title contains: {carve['title']}",
+                                "carve": carve,
+                            }
+                        )
+        except Exception:
+            all_carves = []
+            title_results = []
 
         # 2) Semantic if no title hit
         semantic_results = []
         if not title_results:
-            search_response = requests.post(
-                f"{SUPABASE_URL}/functions/v1/retrieve_memories",
-                headers=HEADERS,
-                json={"userText": query, "k": limit * 2, "importanceFloor": importance_floor},
-            )
-            if search_response.ok:
-                results = search_response.json()
-                carve_hits = results.get("vecHits", [])
-                semantic_results = [h for h in carve_hits if h.get("table_source") == "Carves"]
+            try:
+                search_response = requests.post(
+                    f"{SUPABASE_URL}/functions/v1/retrieve_memories",
+                    headers=HEADERS,
+                    json={"userText": query, "k": limit * 2, "importanceFloor": importance_floor},
+                    timeout=TIMEOUT,
+                )
+                if search_response.ok:
+                    results = search_response.json()
+                    carve_hits = results.get("vecHits", [])
+                    semantic_results = [h for h in carve_hits if h.get("table_source") == "Carves"]
+            except Exception:
+                semantic_results = []
 
         # 3) Literal content if still no title match
         literal_results = []
@@ -685,6 +759,7 @@ def search_carves():
                 carve_res = requests.get(
                     f"{SUPABASE_URL}/rest/v1/Carves?id=eq.{result['id']}&select=id,title,timestamp,summary,moments,insights,quotes,closing,importance,emotag",
                     headers=HEADERS,
+                    timeout=TIMEOUT,
                 )
                 if carve_res.ok and carve_res.json():
                     carve = carve_res.json()[0]
@@ -701,6 +776,7 @@ def search_carves():
             key=lambda x: (min(priority_order.get(mt, 4) for mt in x["match_types"]), x["search_distance"])
         )
 
+        app.logger.info(f"[RID {rid}] /carves/search done ok")
         return jsonify(
             {
                 "carves": final_results[:limit],
@@ -713,12 +789,14 @@ def search_carves():
 
     except Exception as e:
         import traceback
-
+        app.logger.exception(f"[RID {rid}] /carves/search error: {e}")
         return jsonify({"error": "Search failed", "details": str(e), "traceback": traceback.format_exc().splitlines()}), 500
 
 
 @app.route("/carves/<carve_id>", methods=["PATCH"])
 def update_carve(carve_id):
+    rid = str(uuid.uuid4())[:8]
+    app.logger.info(f"[RID {rid}] /carves PATCH start {carve_id}")
     try:
         data = request.get_json()
         if not data:
@@ -731,6 +809,7 @@ def update_carve(carve_id):
                 current_carve = requests.get(
                     f"{SUPABASE_URL}/rest/v1/Carves?id=eq.{carve_id}&select=*",
                     headers=HEADERS,
+                    timeout=TIMEOUT,
                 ).json()
 
                 if current_carve:
@@ -744,22 +823,28 @@ def update_carve(carve_id):
             f"{SUPABASE_URL}/rest/v1/Carves?id=eq.{carve_id}",
             headers=HEADERS,
             json=data,
+            timeout=TIMEOUT,
         )
 
         if response.ok:
             updated_carve = response.json()
             if updated_carve:
+                app.logger.info(f"[RID {rid}] /carves PATCH done ok")
                 return jsonify(updated_carve[0]), 200
             return jsonify({"error": "Carve not found"}), 404
 
+        app.logger.error(f"[RID {rid}] /carves PATCH supabase error: {response.text}")
         return jsonify({"error": "Failed to update carve", "details": response.text}), 500
 
     except Exception as e:
+        app.logger.exception(f"[RID {rid}] /carves PATCH exception: {e}")
         return jsonify({"error": "Failed to update carve", "details": str(e)}), 500
 
 
 @app.route("/echoes", methods=["POST"])
 def create_echo():
+    rid = str(uuid.uuid4())[:8]
+    app.logger.info(f"[RID {rid}] /echoes start")
     try:
         data = request.get_json()
         content = data.get("phrase") or data.get("summary_snippet")
@@ -779,18 +864,24 @@ def create_echo():
             "synthesis_metadata": data.get("synthesis_metadata"),
         }
 
-        response = requests.post(f"{SUPABASE_URL}/rest/v1/Echoes", headers=HEADERS, json=echo_data)
+        response = requests.post(f"{SUPABASE_URL}/rest/v1/Echoes", headers=HEADERS, json=echo_data, timeout=TIMEOUT)
         if response.ok:
+            app.logger.info(f"[RID {rid}] /echoes done ok")
             return jsonify(response.json()[0]), 201
 
+        app.logger.error(f"[RID {rid}] /echoes supabase error: {response.text}")
         return jsonify({"error": "Failed to create echo", "details": response.text}), 500
 
     except Exception as e:
+        app.logger.exception(f"[RID {rid}] /echoes exception: {e}")
         return jsonify({"error": "Failed to create echo", "details": str(e)}), 500
 
 
 @app.route("/echoes/search", methods=["GET"])
 def search_echoes():
+    rid = str(uuid.uuid4())[:8]
+    app.logger.info(f"[RID {rid}] /echoes/search start")
+
     query = request.args.get("query")
     limit = min(int(request.args.get("limit", 8)), 15)
     importance_floor = float(request.args.get("importance_floor", 0.5))
@@ -800,29 +891,34 @@ def search_echoes():
         return jsonify({"error": "Query parameter 'query' is required"}), 400
 
     try:
-        resp = requests.post(
-            f"{SUPABASE_URL}/functions/v1/retrieve_memories",
-            headers=HEADERS,
-            json={"userText": query, "k": limit, "importanceFloor": importance_floor},
-        )
-        if not resp.ok:
-            return jsonify({"error": "Semantic search failed", "details": resp.text}), 500
+        try:
+            resp = requests.post(
+                f"{SUPABASE_URL}/functions/v1/retrieve_memories",
+                headers=HEADERS,
+                json={"userText": query, "k": limit, "importanceFloor": importance_floor},
+                timeout=TIMEOUT,
+            )
+            vec_hits = resp.json().get("vecHits", []) if resp.ok else []
+        except Exception:
+            vec_hits = []
 
-        vec_hits = resp.json().get("vecHits", [])
-        semantic_hits = [h for h in vec_hits if h.get("table_source") == "Echoes" and h["distance"] <= max_distance][
-            :limit
-        ]
+        semantic_hits = [h for h in vec_hits if h.get("table_source") == "Echoes" and h.get("distance", 1) <= max_distance][:limit]
 
-        tag_res = requests.get(
-            f"{SUPABASE_URL}/rest/v1/Echoes"
-            f"?or=(tags.cs.{{{query}}},source.ilike.*{query}*)&limit={limit}"
-            "&select=id,timestamp,summary_snippet,tags,source,importance,type,emotag,persona_tag,theme_tags",
-            headers=HEADERS,
-        )
+        try:
+            tag_res = requests.get(
+                f"{SUPABASE_URL}/rest/v1/Echoes"
+                f"?or=(tags.cs.{{{query}}},source.ilike.*{query}*)&limit={limit}"
+                "&select=id,timestamp,summary_snippet,tags,source,importance,type,emotag,persona_tag,theme_tags",
+                headers=HEADERS,
+                timeout=TIMEOUT,
+            )
+            tag_hits_json = tag_res.json() if tag_res.ok else []
+        except Exception:
+            tag_hits_json = []
+
         tag_hits = []
-        if tag_res.ok:
-            for e in tag_res.json():
-                tag_hits.append({"id": e["id"], "search_distance": 0.0, "echo_data": e})
+        for e in tag_hits_json:
+            tag_hits.append({"id": e["id"], "search_distance": 0.0, "echo_data": e})
 
         seen = set()
         combined = []
@@ -847,6 +943,7 @@ def search_echoes():
                     f"?id=eq.{item['id']}"
                     "&select=id,timestamp,summary_snippet,tags,source,importance,type,emotag,persona_tag,theme_tags",
                     headers=HEADERS,
+                    timeout=TIMEOUT,
                 )
                 echo = detail_res.json()[0] if detail_res.ok and detail_res.json() else None
 
@@ -854,14 +951,18 @@ def search_echoes():
                 echo["search_distance"] = item["search_distance"]
                 full_echoes.append(echo)
 
+        app.logger.info(f"[RID {rid}] /echoes/search done ok")
         return jsonify({"echoes": full_echoes, "returned": len(full_echoes)}), 200
 
     except Exception as err:
+        app.logger.exception(f"[RID {rid}] /echoes/search exception: {err}")
         return jsonify({"error": "Failed to search echoes", "details": str(err)}), 500
 
 
 @app.route("/spine", methods=["POST"])
 def create_spine():
+    rid = str(uuid.uuid4())[:8]
+    app.logger.info(f"[RID {rid}] /spine start")
     try:
         data = request.get_json()
         statement = data.get("statement")
@@ -885,30 +986,41 @@ def create_spine():
             "theme_tags": data.get("theme_tags"),
         }
 
-        response = requests.post(f"{SUPABASE_URL}/rest/v1/Spine", headers=HEADERS, json=spine_data)
+        response = requests.post(f"{SUPABASE_URL}/rest/v1/Spine", headers=HEADERS, json=spine_data, timeout=TIMEOUT)
         if response.ok:
+            app.logger.info(f"[RID {rid}] /spine done ok")
             return jsonify(response.json()[0]), 201
 
+        app.logger.error(f"[RID {rid}] /spine supabase error: {response.text}")
         return jsonify({"error": "Failed to create spine entry", "details": response.text}), 500
 
     except Exception as e:
+        app.logger.exception(f"[RID {rid}] /spine exception: {e}")
         return jsonify({"error": "Failed to create spine entry", "details": str(e)}), 500
 
 
 @app.route("/spine/<spine_id>", methods=["DELETE"])
 def delete_spine(spine_id):
+    rid = str(uuid.uuid4())[:8]
+    app.logger.info(f"[RID {rid}] /spine DELETE start {spine_id}")
     try:
-        response = requests.delete(f"{SUPABASE_URL}/rest/v1/Spine?id=eq.{spine_id}", headers=HEADERS)
+        response = requests.delete(f"{SUPABASE_URL}/rest/v1/Spine?id=eq.{spine_id}", headers=HEADERS, timeout=TIMEOUT)
         if response.ok:
+            app.logger.info(f"[RID {rid}] /spine DELETE done ok")
             return jsonify({"message": "Spine entry deleted successfully"}), 200
+        app.logger.error(f"[RID {rid}] /spine DELETE supabase error: {response.text}")
         return jsonify({"error": "Failed to delete spine entry", "details": response.text}), 500
 
     except Exception as e:
+        app.logger.exception(f"[RID {rid}] /spine DELETE exception: {e}")
         return jsonify({"error": "Failed to delete spine entry", "details": str(e)}), 500
 
 
 @app.route("/spine/search", methods=["GET"])
 def search_spine():
+    rid = str(uuid.uuid4())[:8]
+    app.logger.info(f"[RID {rid}] /spine/search start")
+
     query = request.args.get("query")
     limit = int(request.args.get("limit", 20))
     importance_floor = float(request.args.get("importance_floor", 0.3))
@@ -920,35 +1032,38 @@ def search_spine():
     limit = min(limit, 30)
 
     try:
-        search_response = requests.post(
-            f"{SUPABASE_URL}/functions/v1/retrieve_memories",
-            headers=HEADERS,
-            json={"userText": query, "k": min(limit * 2, 50), "importanceFloor": importance_floor},
-        )
-        if not search_response.ok:
-            return jsonify({"error": "Spine search failed", "details": search_response.text}), 500
-
-        results = search_response.json()
-        spine_hits = results.get("vecHits", [])
-        filtered_hits = [
-            hit for hit in spine_hits if hit.get("table_source") == "Spine" and hit["distance"] <= max_distance
-        ][:limit]
+        try:
+            search_response = requests.post(
+                f"{SUPABASE_URL}/functions/v1/retrieve_memories",
+                headers=HEADERS,
+                json={"userText": query, "k": min(limit * 2, 50), "importanceFloor": importance_floor},
+                timeout=TIMEOUT,
+            )
+            results = search_response.json() if search_response.ok else {}
+            spine_hits = results.get("vecHits", [])
+            filtered_hits = [
+                hit for hit in spine_hits if hit.get("table_source") == "Spine" and hit.get("distance", 1) <= max_distance
+            ][:limit]
+        except Exception:
+            filtered_hits = []
 
         full_spine = []
         for hit in filtered_hits:
             spine_res = requests.get(
                 f"{SUPABASE_URL}/rest/v1/Spine?id=eq.{hit['id']}&select=id,timestamp,statement,origin,vow,tags,importance,type,emotag,persona_tag,theme_tags",
                 headers=HEADERS,
+                timeout=TIMEOUT,
             )
             if spine_res.ok and spine_res.json():
                 spine = spine_res.json()[0]
                 spine["search_distance"] = hit["distance"]
                 full_spine.append(spine)
 
+        app.logger.info(f"[RID {rid}] /spine/search done ok")
         return jsonify(
             {
                 "spine_entries": full_spine,
-                "total_found": len(spine_hits),
+                "total_found": len(filtered_hits),
                 "returned": len(full_spine),
                 "message": "Identity reinforcement search completed",
                 "filters_applied": {
@@ -960,20 +1075,26 @@ def search_spine():
         ), 200
 
     except Exception as e:
+        app.logger.exception(f"[RID {rid}] /spine/search exception: {e}")
         return jsonify({"error": "Failed to search spine", "details": str(e)}), 500
 
 
 @app.route("/anchor", methods=["POST"])
 def create_anchor():
-    try:
-        print("=== ANCHOR DEBUG START ===")
-        data = request.get_json()
-        app.logger.info(f"Received data: {data}")
+    """
+    Create an anchor entry about the conversation partner (usually Liz).
+    Uses strict timeouts so Actions never stall.
+    """
+    import uuid
+    rid = str(uuid.uuid4())[:8]
+    app.logger.info(f"[RID {rid}] /anchor POST start")
 
+    try:
+        data = request.get_json(force=True) or {}
         summary_snippet = data.get("summary_snippet")
         if not summary_snippet:
-            print("Missing summary_snippet!")
-            return jsonify({"error": "summary_snippet is required", "received": data}), 400
+            app.logger.warning(f"[RID {rid}] /anchor missing summary_snippet")
+            return jsonify({"error": "summary_snippet is required"}), 400
 
         anchor_data = {
             "summary_snippet": summary_snippet,
@@ -986,39 +1107,44 @@ def create_anchor():
             "theme_tags": data.get("theme_tags"),
         }
 
-        print(f"Sending to Supabase: {anchor_data}")
+        resp = requests.post(
+            f"{SUPABASE_URL}/rest/v1/Anchor",
+            headers=HEADERS,
+            json=anchor_data,
+            timeout=TIMEOUT,
+        )
 
-        response = requests.post(f"{SUPABASE_URL}/rest/v1/Anchor", headers=HEADERS, json=anchor_data)
+        if resp.ok:
+            out = resp.json()[0]
+            app.logger.info(f"[RID {rid}] /anchor created id={out.get('id')}")
+            return jsonify(out), 201
 
-        print(f"Supabase status: {response.status_code}")
-        print(f"Supabase response: {response.text}")
+        app.logger.error(f"[RID {rid}] /anchor supabase error {resp.status_code}: {resp.text}")
+        return jsonify({"error": "Failed to create anchor entry", "details": resp.text}), 500
 
-        if response.ok:
-            result = response.json()
-            print(f"Success! Created: {result}")
-            return jsonify(result[0]), 201
-
-        print(f"Supabase error: {response.text}")
-        return jsonify(
-            {"error": "Failed to create anchor entry", "supabase_error": response.text, "status_code": response.status_code}
-        ), 500
-
+    except requests.Timeout:
+        app.logger.error(f"[RID {rid}] /anchor timeout")
+        return jsonify({"error": "Anchor creation timed out"}), 504
     except Exception as e:
-        print(f"Python exception: {str(e)}")
-        import traceback
-
-        traceback.print_exc()
+        app.logger.exception(f"[RID {rid}] /anchor exception: {e}")
         return jsonify({"error": "Failed to create anchor entry", "details": str(e)}), 500
 
 
 @app.route("/anchor/persona/<persona_name>", methods=["GET"])
 def get_anchor_by_persona(persona_name):
+    import uuid
+    rid = str(uuid.uuid4())[:8]
+    app.logger.info(f"[RID {rid}] /anchor/persona GET start persona={persona_name}")
+
     try:
-        response = requests.get(
-            f"{SUPABASE_URL}/rest/v1/Anchor?persona_tag=eq.{persona_name}&order=timestamp.desc", headers=HEADERS
+        resp = requests.get(
+            f"{SUPABASE_URL}/rest/v1/Anchor?persona_tag=eq.{persona_name}&order=timestamp.desc",
+            headers=HEADERS,
+            timeout=TIMEOUT,
         )
-        if response.ok:
-            entries = response.json()
+        if resp.ok:
+            entries = resp.json()
+            app.logger.info(f"[RID {rid}] /anchor/persona returned {len(entries)} rows")
             return jsonify(
                 {
                     "persona": persona_name,
@@ -1028,9 +1154,14 @@ def get_anchor_by_persona(persona_name):
                 }
             ), 200
 
-        return jsonify({"error": "Failed to fetch anchor entries", "details": response.text}), 500
+        app.logger.error(f"[RID {rid}] /anchor/persona supabase error {resp.status_code}: {resp.text}")
+        return jsonify({"error": "Failed to fetch anchor entries", "details": resp.text}), 500
 
+    except requests.Timeout:
+        app.logger.error(f"[RID {rid}] /anchor/persona timeout")
+        return jsonify({"persona": persona_name, "anchor_entries": [], "total_entries": 0}), 200
     except Exception as e:
+        app.logger.exception(f"[RID {rid}] /anchor/persona exception: {e}")
         return jsonify({"error": "Failed to fetch anchor entries", "details": str(e)}), 500
 
 
@@ -1038,37 +1169,33 @@ def get_anchor_by_persona(persona_name):
 def chat_with_autopilot():
     """
     Returns up to 3 memory snippets (Carves/Echoes) that semantically match this turn,
-    with a 20% chance to include a single Spine truth (without exceeding 3 lines total).
-    Also injects an optional system reminder and supports brief vs full diagnostics.
+    with a 20% chance to include one Spine truth (without exceeding 3 lines total).
 
-    Optional request fields:
-      - debug: bool -> brief telemetry (counts/stats)
-      - diag: bool -> add full diagnostics (candidate samples)
-      - k: int -> number of candidates to retrieve (default 15)
-      - importance_floor: float -> minimum importance for retrieval (default 0.3)
-      - max_distance: float -> if set, drop candidates with distance > max_distance
-      - inject_reminder: bool -> override server default
-      - inject_position: "start"|"end"
-      - thread_id: string -> to separate threads in server cache (default "default")
+    Fail-soft behavior:
+      - If the vector function or Supabase calls time out, we return a minimal-but-valid payload quickly,
+        so the Action never "stops talking to connector".
     """
+    import uuid
+    rid = str(uuid.uuid4())[:8]
+    app.logger.info(f"[RID {rid}] /chat start")
+
     try:
         data = request.get_json() or {}
+        user_msg   = data.get("message", "")
+        thread_id  = data.get("thread_id", "default")
 
-        user_msg = data.get("message", "")
-        thread_id = data.get("thread_id", "default")
-
-        # Optional per-request overrides
-        debug_verbose = bool(data.get("debug", DEBUG_VERBOSE_DEFAULT))   # brief telemetry
-        diag_verbose  = bool(data.get("diag", False))                    # full diagnostics
+        # Optional flags
+        debug_verbose  = bool(data.get("debug", DEBUG_VERBOSE_DEFAULT))
+        diag_verbose   = bool(data.get("diag", False))
         inject_reminder = bool(data.get("inject_reminder", REMINDER_ENABLED))
-        inject_position = data.get("inject_position", REMINDER_POSITION)  # "start"|"end"
+        inject_position = data.get("inject_position", REMINDER_POSITION)
 
-        # Retrieval tuning (clamped)
+        # Retrieval tuning (clamped & safer defaults)
         try:
-            retrieve_k = int(data.get("k", 15))
+            retrieve_k = int(data.get("k", 12))
         except Exception:
-            retrieve_k = 15
-        retrieve_k = max(1, min(retrieve_k, 100))
+            retrieve_k = 12
+        retrieve_k = max(1, min(retrieve_k, 40))
 
         try:
             importance_floor = float(data.get("importance_floor", 0.3))
@@ -1087,24 +1214,30 @@ def chat_with_autopilot():
         init_thread(thread_id)
         conversation_cache[thread_id]["turn_index"] += 1
 
-        # keep for parity (unused output), but don't surface in response
-        _ = cue_scan(user_msg, conversation_cache[thread_id])
-
-        # Retrieve candidate memories
-        resp = requests.post(
-            f"{SUPABASE_URL}/functions/v1/retrieve_memories",
-            headers=HEADERS,
-            json={"userText": user_msg, "k": retrieve_k, "importanceFloor": importance_floor},
-        )
-        resp.raise_for_status()
-        candidates = resp.json().get("vecHits", [])
+        # Retrieve candidate memories (fail-soft)
+        candidates = []
+        try:
+            resp = requests.post(
+                f"{SUPABASE_URL}/functions/v1/retrieve_memories",
+                headers=HEADERS,
+                json={"userText": user_msg, "k": retrieve_k, "importanceFloor": importance_floor},
+                timeout=TIMEOUT,
+            )
+            resp.raise_for_status()
+            candidates = resp.json().get("vecHits", []) or []
+        except requests.Timeout:
+            app.logger.warning(f"[RID {rid}] /chat vector retrieve timeout; continuing with empty candidates")
+            candidates = []
+        except requests.RequestException as e:
+            app.logger.warning(f"[RID {rid}] /chat vector retrieve error: {e}; continuing with empty candidates")
+            candidates = []
 
         # Optional quality gate
         if max_distance is not None:
-            candidates = [
-                h for h in candidates
-                if isinstance(h.get("distance"), (int, float)) and h["distance"] <= max_distance
-            ]
+            def _ok(h):
+                d = h.get("distance")
+                return isinstance(d, (int, float)) and d <= max_distance
+            candidates = [h for h in candidates if _ok(h)]
 
         # Only keep Carves or Echoes for working memory
         candidates = [h for h in candidates if h.get("table_source") in ("Carves", "Echoes")]
@@ -1126,7 +1259,7 @@ def chat_with_autopilot():
                     adj = hit["distance"] - recency_boost
                 else:
                     days_ago = 999
-                    adj = hit["distance"]
+                    adj = hit.get("distance", 1.0)
                 boosted.append({**hit, "adjusted_distance": adj, "days_ago": days_ago})
             except Exception:
                 boosted.append({**hit, "adjusted_distance": hit.get("distance", 1.0), "days_ago": 999})
@@ -1135,24 +1268,25 @@ def chat_with_autopilot():
         top_ids = [m["id"] for m in top_candidates]
         working_ids = update_working_set(thread_id, top_ids)
 
-        # Build core snippets from Carves/Echoes only
+        # Build core snippets
         core_snippets = []
         for mid in working_ids:
+            # Note: get_enhanced_memory_snippet() performs Supabase reads; those should
+            # have been updated earlier in the file to add timeout=TIMEOUT.
             snip = get_enhanced_memory_snippet(mid)
             if snip:
                 core_snippets.append(snip)
-        # take only the top 3
         core_snippets = core_snippets[:MAX_SNIPPETS]
 
-        # Occasional Spine (20% chance, cooldown). Replace last if needed to stay within MAX_SNIPPETS.
+        # Occasional Spine (20% chance + cooldown)
         spine_line = maybe_include_spine(thread_id)
         memory_lines = _cap_snippets(core_snippets, spine_line, MAX_SNIPPETS)
 
-        # Time context (Central Time)
+        # Time context (Central)
         central_tz = pytz.timezone("US/Central")
         time_context = f"Current time: {datetime.now(central_tz).strftime('%A, %B %d, %Y at %I:%M %p %Z')}"
 
-        # Reminder injection + final assembly
+        # Assemble
         if inject_reminder and inject_position == "start":
             all_snippets = [REMINDER_TEXT, time_context] + memory_lines
         else:
@@ -1160,14 +1294,13 @@ def chat_with_autopilot():
             if inject_reminder and inject_position == "end":
                 all_snippets.append(REMINDER_TEXT)
 
-        # Payload
         base_payload = {
             "memory_snippets": all_snippets,
             "spine_included": any(s.startswith("(SPINE)") for s in memory_lines),
             "recency_boost_applied": True,
         }
 
-        # Brief telemetry if debug=true; full diagnostics only if diag=true as well
+        # Telemetry (brief by default; fuller if diag=true)
         if debug_verbose:
             dists = [c.get("distance") for c in candidates if isinstance(c.get("distance"), (int, float))]
             d_sorted = sorted(dists) if dists else []
@@ -1182,12 +1315,12 @@ def chat_with_autopilot():
                 return arr[k]
 
             telemetry = {
+                "request_id": rid,
                 "params": {"k": retrieve_k, "importance_floor": importance_floor, "max_distance": max_distance},
                 "counts": {
                     "total_candidates": len(candidates),
                     "within_max_distance": (
-                        sum(1 for c in candidates if isinstance(c.get("distance"), (int, float)) and c["distance"] <= max_distance)
-                        if max_distance is not None else len(candidates)
+                        sum(1 for c in candidates if isinstance(c.get("distance"), (int, float)) and (max_distance is None or c["distance"] <= max_distance))
                     ),
                 },
                 "distance_stats": {
@@ -1214,22 +1347,24 @@ def chat_with_autopilot():
                     ],
                 })
 
-        # Make the UI paste useful bullets by default; add telemetry only for full diag
         base_payload["message"] = _format_chat_message(
             memory_lines,
             base_payload.get("retrieval_telemetry") if (debug_verbose and diag_verbose) else None
         )
 
+        app.logger.info(f"[RID {rid}] /chat ok, lines={len(memory_lines)}")
         return jsonify(base_payload), 200
 
     except Exception as e:
         import traceback
-        return jsonify({"error": str(e), "traceback": traceback.format_exc().splitlines()}), 500
+        app.logger.exception(f"[RID {rid}] /chat exception: {e}")
+        return jsonify({"error": str(e), "traceback": traceback.format_exc().splitlines(), "request_id": rid}), 500
 
 
 # ------------------------------------------------------------
 # Entrypoint
 # ------------------------------------------------------------
-
 if __name__ == "__main__":
-    app.run(debug=True, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    # Important: do not enable Flask debug in prod behind Actions; Werkzeug reloader
+    # can serve a transient empty/partial OpenAPI during reloads.
+    app.run(debug=False, host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
