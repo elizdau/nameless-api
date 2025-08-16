@@ -10,6 +10,15 @@ import pytz
 import requests
 from flask import Flask, jsonify, request, send_from_directory
 
+import sys, logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+app.logger.setLevel(logging.INFO)
+logging.getLogger("werkzeug").setLevel(logging.INFO)
+
 # ------------------------------------------------------------
 # Config
 # ------------------------------------------------------------
