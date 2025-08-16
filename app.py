@@ -287,62 +287,77 @@ def generate_dual_summaries(carve_data):
 def get_enhanced_memory_snippet(memory_id):
     """
     Prefer Carves dual summaries; fall back to Echoes.
+    Carve line includes local (US/Central) timestamp.
     """
     try:
         r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/Carves?id=eq.{memory_id}&select=title,factual_summary,tonal_snippet,summary_snippet",
+            f"{SUPABASE_URL}/rest/v1/Carves"
+            f"?id=eq.{memory_id}&select=title,factual_summary,tonal_snippet,summary_snippet,timestamp",
             headers=HEADERS,
             timeout=TIMEOUT,
         )
-        r.raise_for_status()
-        data = r.json()
+        j = r.json() if r.ok else []
     except Exception:
-        data = []
+        j = []
 
-    if data:
-        carve = data[0]
-        title = carve.get("title", "Untitled")
+    if j:
+        carve = j[0]
+        title   = carve.get("title", "Untitled")
         factual = carve.get("factual_summary")
-        tonal = carve.get("tonal_snippet")
-        fallback = carve.get("summary_snippet", "")
+        tonal   = carve.get("tonal_snippet")
+        fallback= carve.get("summary_snippet", "")
 
+        # format timestamp in US/Central
+        date_str = ""
+        ts = carve.get("timestamp")
+        if ts:
+            try:
+                ts_str = ts.replace("Z", "+00:00")
+                if "T" in ts_str and "+" not in ts_str:
+                    ts_str += "+00:00"
+                dt = datetime.fromisoformat(ts_str)
+                central_tz = pytz.timezone("US/Central")
+                dt_c = dt.astimezone(central_tz)
+                date_str = dt_c.strftime("%b %d, %Y %I:%M %p %Z")  # e.g., Aug 16, 2025 01:18 PM CDT
+            except Exception:
+                pass
+
+        prefix = f"[CARVE: {title} • {date_str}]" if date_str else f"[CARVE: {title}]"
         if factual and tonal:
-            snippet = f"[CARVE: {title}] {factual} // Resonance: {tonal}"
-        elif factual:
-            snippet = f"[CARVE: {title}] {factual}"
-        elif tonal:
-            snippet = f"[CARVE: {title}] {tonal}"
-        else:
-            snippet = f"[CARVE: {title}] {fallback}"
-        return snippet
+            return f"{prefix} {factual} // Resonance: {tonal}"
+        if factual:
+            return f"{prefix} {factual}"
+        if tonal:
+            return f"{prefix} {tonal}"
+        return f"{prefix} {fallback}"
 
+    # ---- Echo fallback ----
     try:
         r = requests.get(
-            f"{SUPABASE_URL}/rest/v1/Echoes?id=eq.{memory_id}&select=summary_snippet,tags,persona_tag,source",
+            f"{SUPABASE_URL}/rest/v1/Echoes"
+            f"?id=eq.{memory_id}&select=summary_snippet,tags,persona_tag,source",
             headers=HEADERS,
             timeout=TIMEOUT,
         )
-        r.raise_for_status()
-        data = r.json()
+        j = r.json() if r.ok else []
     except Exception:
-        data = []
+        j = []
 
-    if data:
-        echo = data[0]
-        tags_str = ", ".join(echo.get("tags", [])) if echo.get("tags") else "no tags"
-        persona = echo.get("persona_tag", "")
-        source = echo.get("source", "")
+    if j:
+        echo = j[0]
+        tags = echo.get("tags") or []
+        tags_str = ", ".join(tags) if tags else "no tags"
+        persona = echo.get("persona_tag") or ""
+        source  = echo.get("source") or ""
 
-        if persona:
-            snippet = f"[ECHO by {persona}] {echo['summary_snippet']}"
-        else:
-            snippet = f"[ECHO] {echo['summary_snippet']}"
+        snippet = f"[ECHO by {persona}] {echo['summary_snippet']}" if persona else f"[ECHO] {echo['summary_snippet']}"
         snippet += f" (tags: {tags_str})"
         if source:
             snippet += f" (context: {source})"
         return snippet
 
     return None
+
 
 
 def fetch_top_spine_by_rank():
