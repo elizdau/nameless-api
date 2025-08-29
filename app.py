@@ -23,17 +23,25 @@ app.logger.setLevel(logging.INFO)  # <- Now app exists!
 logging.getLogger("werkzeug").setLevel(logging.INFO)
 
 # ------------------------------------------------------------
-# Config
+# Config (SUPABASE keys)
 # ------------------------------------------------------------
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_API_KEY = os.environ.get("SUPABASE_API_KEY")
-openai.api_key = os.environ.get("OPENAI_API_KEY")
+
+# Prefer service role if available (server-only). Fallback to old env var.
+SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_API_KEY")
+if not SUPABASE_KEY or not SUPABASE_URL:
+    app.logger.warning("Supabase URL or key missing; some endpoints will fail if called.")
+
+# Headers used for REST calls to Supabase (server-side)
 HEADERS = {
-    "apikey": SUPABASE_API_KEY,
-    "Authorization": f"Bearer {SUPABASE_API_KEY}",
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
     "Content-Type": "application/json",
     "Prefer": "return=representation",
 }
+
+# Protect the new memory intake endpoint: set this in Render/.env
+PROXY_API_KEY = os.environ.get("PROXY_API_KEY")  # keep this secret; require X-API-KEY header on calls
 
 # ---- HTTP timeouts (connector-friendly) ----
 CONNECT_TO = float(os.environ.get("CONNECT_TIMEOUT_S", "2.5"))
