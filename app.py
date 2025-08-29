@@ -1186,12 +1186,14 @@ def get_anchor_by_persona(persona_name):
 @app.route("/chat", methods=["POST"])
 def chat_with_autopilot():
     """
-    Returns up to 3 memory snippets (Carves/Echoes) that semantically match this turn,
-    with a 20% chance to include one Spine truth (without exceeding 3 lines total).
+    Returns up to MAX_SNIPPETS memory snippets (Carves/Echoes) that semantically match this turn,
+    plus (when available) a single semantically-associated Spine statement.
 
-    Fail-soft behavior:
-      - If the vector function or Supabase calls time out, we return a minimal-but-valid payload quickly,
-        so the Action never "stops talking to connector".
+    This variant:
+    - Always returns memory_ids (list of UUIDs) for the selected snippets.
+    - Attempts to select one semantically-relevant Spine (if available).
+    - De-duplicates returned snippets (by id).
+    - Fail-soft: on errors/timeouts returns a minimal payload quickly.
     """
     import uuid
     rid = str(uuid.uuid4())[:8]
@@ -1202,18 +1204,17 @@ def chat_with_autopilot():
         user_msg   = data.get("message", "")
         thread_id  = data.get("thread_id", "default")
 
-        # Optional flags
+        # Flags and retrieval tuning
         debug_verbose  = bool(data.get("debug", DEBUG_VERBOSE_DEFAULT))
         diag_verbose   = bool(data.get("diag", False))
         inject_reminder = bool(data.get("inject_reminder", REMINDER_ENABLED))
         inject_position = data.get("inject_position", REMINDER_POSITION)
 
-        # Retrieval tuning (clamped & safer defaults)
         try:
             retrieve_k = int(data.get("k", 12))
         except Exception:
             retrieve_k = 12
-        retrieve_k = max(1, min(retrieve_k, 40))
+        retrieve_k = max(1, min(retrieve_k, 60))
 
         try:
             importance_floor = float(data.get("importance_floor", 0.3))
@@ -1232,7 +1233,7 @@ def chat_with_autopilot():
         init_thread(thread_id)
         conversation_cache[thread_id]["turn_index"] += 1
 
-        # Retrieve candidate memories (fail-soft)
+        # Retrieve candidate memories (vector function). Fail-soft on errors/timeouts.
         candidates = []
         try:
             resp = requests.post(
@@ -1252,18 +1253,16 @@ def chat_with_autopilot():
 
         # Optional quality gate
         if max_distance is not None:
-            def _ok(h):
-                d = h.get("distance")
-                return isinstance(d, (int, float)) and d <= max_distance
-            candidates = [h for h in candidates if _ok(h)]
+            candidates = [h for h in candidates if isinstance(h.get("distance"), (int, float)) and h["distance"] <= max_distance]
 
-        # Only keep Carves or Echoes for working memory
-        candidates = [h for h in candidates if h.get("table_source") in ("Carves", "Echoes")]
+        # Prefer Carves/Echoes for working memory; keep Spine candidates separate to pick a semantically-matching spine if present
+        memory_candidates = [h for h in candidates if h.get("table_source") in ("Carves", "Echoes")]
+        spine_candidates  = [h for h in candidates if h.get("table_source") == "Spine"]
 
-        # Recency boost (distance-minus-boost)
+        # Recency boost and sorting (same logic you had)
         boosted = []
         now_utc = datetime.now(timezone.utc)
-        for hit in candidates:
+        for hit in memory_candidates:
             try:
                 ts_str = hit.get("timestamp", "")
                 if ts_str:
@@ -1273,7 +1272,7 @@ def chat_with_autopilot():
                         ts_str += "+00:00"
                     ts = datetime.fromisoformat(ts_str)
                     days_ago = (now_utc - ts).days
-                    recency_boost = min(days_ago * 0.02, 0.2)  # newer => smaller distance
+                    recency_boost = min(days_ago * 0.02, 0.2)
                     adj = hit["distance"] - recency_boost
                 else:
                     days_ago = 999
@@ -1282,29 +1281,52 @@ def chat_with_autopilot():
             except Exception:
                 boosted.append({**hit, "adjusted_distance": hit.get("distance", 1.0), "days_ago": 999})
 
+        # choose top N working set and record ids (will be used for get_enhanced_memory_snippet)
         top_candidates = sorted(boosted, key=lambda m: m["adjusted_distance"])[:MAX_WORKING_SET]
         top_ids = [m["id"] for m in top_candidates]
+
+        # update working set & produce the snippet lines for those ids (de-dup)
         working_ids = update_working_set(thread_id, top_ids)
-
-        # Build core snippets
         core_snippets = []
+        core_ids = []
         for mid in working_ids:
-            # Note: get_enhanced_memory_snippet() performs Supabase reads; those should
-            # have been updated earlier in the file to add timeout=TIMEOUT.
             snip = get_enhanced_memory_snippet(mid)
-            if snip:
+            if snip and mid not in core_ids:
                 core_snippets.append(snip)
-        core_snippets = core_snippets[:MAX_SNIPPETS]
+                core_ids.append(mid)
 
-        # Occasional Spine (20% chance + cooldown)
-        spine_line = maybe_include_spine(thread_id)
+        # limit the number of snippet lines we return
+        core_snippets = core_snippets[:MAX_SNIPPETS]
+        core_ids = core_ids[:MAX_SNIPPETS]
+
+        # --- semantically-associated Spine: prefer any spine candidate from vector results (closest distance)
+        spine_line = None
+        spine_id = None
+        try:
+            if spine_candidates:
+                # pick the closest spine hit
+                spine_hit = sorted(spine_candidates, key=lambda x: x.get("distance", 1.0))[0]
+                sid = spine_hit.get("id")
+                if sid:
+                    # fetch statement from Spine table (timeout)
+                    sresp = requests.get(f"{SUPABASE_URL}/rest/v1/Spine?id=eq.{sid}&select=statement", headers=HEADERS, timeout=TIMEOUT)
+                    if sresp.ok and sresp.json():
+                        statement = sresp.json()[0].get("statement")
+                        if statement:
+                            spine_line = f"(SPINE) {statement}"
+                            spine_id = sid
+        except Exception:
+            spine_line = None
+            spine_id = None
+
+        # Combine core snippets with optional spine (ensures totaling at most MAX_SNIPPETS)
         memory_lines = _cap_snippets(core_snippets, spine_line, MAX_SNIPPETS)
 
-        # Time context (Central)
+        # Build time context (Central)
         central_tz = pytz.timezone("US/Central")
         time_context = f"Current time: {datetime.now(central_tz).strftime('%A, %B %d, %Y at %I:%M %p %Z')}"
 
-        # Assemble
+        # final assembly: place reminder optionally
         if inject_reminder and inject_position == "start":
             all_snippets = [REMINDER_TEXT, time_context] + memory_lines
         else:
@@ -1312,71 +1334,42 @@ def chat_with_autopilot():
             if inject_reminder and inject_position == "end":
                 all_snippets.append(REMINDER_TEXT)
 
-        base_payload = {
+        # payload: include the memory ids we used so caller can avoid re-saving them
+        payload = {
             "memory_snippets": all_snippets,
-            "spine_included": any(s.startswith("(SPINE)") for s in memory_lines),
+            "memory_ids": core_ids,      # the Carves/Echoes ids returned (order preserved)
+            "spine_id": spine_id,        # optional (may be None)
+            "spine_included": bool(spine_line),
             "recency_boost_applied": True,
         }
 
-        # Telemetry (brief by default; fuller if diag=true)
+        # telemetry when requested
         if debug_verbose:
             dists = [c.get("distance") for c in candidates if isinstance(c.get("distance"), (int, float))]
             d_sorted = sorted(dists) if dists else []
-
-            def percentile(arr, p):
-                if not arr:
-                    return None
-                if len(arr) == 1:
-                    return arr[0]
-                k = int(round((p / 100.0) * (len(arr) - 1)))
-                k = max(0, min(k, len(arr) - 1))
-                return arr[k]
-
             telemetry = {
                 "request_id": rid,
-                "params": {"k": retrieve_k, "importance_floor": importance_floor, "max_distance": max_distance},
-                "counts": {
-                    "total_candidates": len(candidates),
-                    "within_max_distance": (
-                        sum(1 for c in candidates if isinstance(c.get("distance"), (int, float)) and (max_distance is None or c["distance"] <= max_distance))
-                    ),
-                },
+                "params": {"k": retrieve_k, "importance_floor": importance_floor},
+                "counts": {"total_candidates": len(candidates)},
                 "distance_stats": {
                     "min": d_sorted[0] if d_sorted else None,
-                    "median": percentile(d_sorted, 50),
-                    "p90": percentile(d_sorted, 90),
+                    "median": d_sorted[len(d_sorted)//2] if d_sorted else None,
+                    "p90": (d_sorted[int(len(d_sorted)*0.9)] if d_sorted else None),
                 },
             }
-            base_payload["retrieval_telemetry"] = telemetry
+            payload["retrieval_telemetry"] = telemetry
 
-            if diag_verbose:
-                base_payload.update({
-                    "thread_id_echo": thread_id,
-                    "turn_index": conversation_cache[thread_id]["turn_index"],
-                    "debug_candidates": [
-                        {
-                            "id": c.get("id", "")[:8],
-                            "original_distance": c.get("distance"),
-                            "adjusted_distance": c.get("adjusted_distance"),
-                            "days_ago": c.get("days_ago"),
-                            "table_source": c.get("table_source"),
-                        }
-                        for c in top_candidates[:3]
-                    ],
-                })
+        # human readable trace
+        payload["message"] = _format_chat_message(memory_lines, payload.get("retrieval_telemetry"))
 
-        base_payload["message"] = _format_chat_message(
-            memory_lines,
-            base_payload.get("retrieval_telemetry") if (debug_verbose and diag_verbose) else None
-        )
-
-        app.logger.info(f"[RID {rid}] /chat ok, lines={len(memory_lines)}")
-        return jsonify(base_payload), 200
+        app.logger.info(f"[RID {rid}] /chat ok, memory_lines={len(memory_lines)}, ids={len(core_ids)}")
+        return jsonify(payload), 200
 
     except Exception as e:
         import traceback
         app.logger.exception(f"[RID {rid}] /chat exception: {e}")
         return jsonify({"error": str(e), "traceback": traceback.format_exc().splitlines(), "request_id": rid}), 500
+
 
 @app.route("/store_memories", methods=["POST"])
 def store_memories():
