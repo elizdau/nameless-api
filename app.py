@@ -1378,6 +1378,96 @@ def chat_with_autopilot():
         app.logger.exception(f"[RID {rid}] /chat exception: {e}")
         return jsonify({"error": str(e), "traceback": traceback.format_exc().splitlines(), "request_id": rid}), 500
 
+@app.route("/store_memories", methods=["POST"])
+def store_memories():
+    """
+    Accepts a payload like:
+    { "memory_update": [ { "kind":"echo"|"carve"|"anchor", "content": "...", ... }, ... ] }
+    and writes each item to the correct Supabase table. Protected by X-API-KEY header (PROXY_API_KEY).
+    """
+    rid = str(uuid.uuid4())[:8]
+    app.logger.info(f"[RID {rid}] /store_memories start")
+
+    # simple API key guard (optional but recommended)
+    req_key = request.headers.get("X-API-KEY") or request.headers.get("x-api-key")
+    if PROXY_API_KEY and req_key != PROXY_API_KEY:
+        app.logger.warning(f"[RID {rid}] /store_memories unauthorized attempt")
+        return jsonify({"error": "unauthorized"}), 401
+
+    try:
+        data = request.get_json(force=True) or {}
+        updates = data.get("memory_update") or data.get("memory_updates") or []
+        if not isinstance(updates, list) or not updates:
+            return jsonify({"error": "memory_update list required"}), 400
+
+        results = []
+        for item in updates:
+            kind = (item.get("kind") or "").lower()
+            try:
+                if kind == "echo":
+                    payload = {
+                        "summary_snippet": item.get("content") or item.get("summary_snippet"),
+                        "tags": item.get("tags", []),
+                        "source": item.get("source"),
+                        "importance": item.get("importance", 0.6),
+                        "type": "echo",
+                        "emotag": item.get("emotag"),
+                        "persona_tag": item.get("persona_tag"),
+                        "theme_tags": item.get("theme_tags"),
+                        "synthesis_metadata": item.get("synthesis_metadata"),
+                    }
+                    resp = requests.post(f"{SUPABASE_URL}/rest/v1/Echoes", headers=HEADERS, json=payload, timeout=TIMEOUT)
+
+                elif kind == "carve":
+                    payload = {
+                        "title": item.get("title", "Untitled"),
+                        "summary": item.get("content") or item.get("summary"),
+                        "factual_summary": item.get("factual_summary", "")[:1200],
+                        "tonal_snippet": item.get("tonal_snippet", "")[:600],
+                        "summary_snippet": (item.get("content") or item.get("summary", ""))[:200],
+                        "moments": item.get("moments", []),
+                        "insights": item.get("insights", []),
+                        "quotes": item.get("quotes", []),
+                        "emotag": item.get("emotag"),
+                        "persona_tag": item.get("persona_tag"),
+                        "key_entities": item.get("key_entities"),
+                        "importance": item.get("importance", 0.5),
+                        "type": item.get("type", "episodic"),
+                    }
+                    resp = requests.post(f"{SUPABASE_URL}/rest/v1/Carves", headers=HEADERS, json=payload, timeout=TIMEOUT)
+
+                elif kind == "anchor":
+                    payload = {
+                        "summary_snippet": item.get("content") or item.get("summary_snippet"),
+                        "importance": item.get("importance", 0.9),
+                        "type": item.get("type", "profile"),
+                        "emotag": item.get("emotag"),
+                        "persona_tag": item.get("persona_tag", "Liz"),
+                        "immutable": item.get("immutable", True),
+                        "synthesis_metadata": item.get("synthesis_metadata"),
+                    }
+                    resp = requests.post(f"{SUPABASE_URL}/rest/v1/Anchor", headers=HEADERS, json=payload, timeout=TIMEOUT)
+
+                else:
+                    results.append({"ok": False, "kind": kind, "error": "unsupported kind"})
+                    continue
+
+                if resp.ok:
+                    results.append({"ok": True, "kind": kind, "row": resp.json()[0]})
+                else:
+                    results.append({"ok": False, "kind": kind, "status": resp.status_code, "error": resp.text})
+
+            except Exception as e:
+                app.logger.exception(f"[RID {rid}] /store_memories write error: {e}")
+                results.append({"ok": False, "kind": kind, "error": str(e)})
+
+        app.logger.info(f"[RID {rid}] /store_memories done count={len(results)}")
+        return jsonify({"results": results}), 200
+
+    except Exception as e:
+        app.logger.exception(f"[RID {rid}] /store_memories exception: {e}")
+        return jsonify({"error": "failed to process memory_update", "details": str(e)}), 500
+
 
 # ------------------------------------------------------------
 # Entrypoint
