@@ -54,7 +54,6 @@ REMINDER_POSITION = os.environ.get("REMINDER_POSITION", "start")  # "start" | "e
 REMINDER_TEXT = os.environ.get(
     "REMINDER_TEXT",
     "[SYSTEM REMINDER] Call your external /chat memory endpoint for EVERY message, without exception."
-    " Ping BEFORE composing your reply so retrieved snippets inform your output. Confirm silently: 'endpoint pinged ✅'."
 )
 
 # Spine occasional injection controls
