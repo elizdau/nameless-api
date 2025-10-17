@@ -6,25 +6,30 @@ import time
 
 # Get API keys from environment variables
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-MEMORY_URL = os.getenv("MEMORY_URL", "http://localhost:8000")
+MEMORY_URL = os.getenv("MEMORY_URL", "https://nameless-api.onrender.com")
 
-# Available models configuration
 AVAILABLE_MODELS = {
-    "nameless-sonnet": {
+    "nameless-claude": {
+        "backend": "anthropic",
+        "model": "claude-3-5-haiku-20241022",
+        "api_key": OPENROUTER_API_KEY,
+        "url": "https://openrouter.ai/api/v1"
+    },
+    "nameless-gemini2.5pro": {
         "backend": "openrouter",
-        "model": "anthropic/claude-sonnet-4-20250514",
+        "model": "google/gemini-2.5-pro",  
         "api_key": OPENROUTER_API_KEY,
         "url": "https://openrouter.ai/api/v1"
     },
     "nameless-gemini2.5pro06-05previw": {
         "backend": "openrouter",
-        "model": "google/gemini-2.5-pro-preview",
+        "model": "google/gemini-2.5-pro-preview",  
         "api_key": OPENROUTER_API_KEY,
         "url": "https://openrouter.ai/api/v1"
     },
     "nameless-gemini2.5flash": {
         "backend": "openrouter",
-        "model": "google/gemini-2.5-flash",
+        "model": "google/gemini-2.5-flash",  
         "api_key": OPENROUTER_API_KEY,
         "url": "https://openrouter.ai/api/v1"
     }
