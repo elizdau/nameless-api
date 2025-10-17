@@ -2,6 +2,12 @@ services:
   - type: web
     name: nameless-api
     env: python
-    buildCommand: ""
-    startCommand: "python app.py"
-    plan: free
+    branch: openwebui-openrouter
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn memory_service:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: SUPABASE_DB_URL
+        sync: false
+    healthCheckPath: /
