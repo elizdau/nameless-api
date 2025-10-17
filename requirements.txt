@@ -1,2 +1,7 @@
 flask
 requests
+fastapi==0.115.0
+uvicorn==0.32.0
+psycopg2-binary==2.9.9
+openai==1.54.3
+pydantic==2.9.2
