@@ -10,7 +10,20 @@ app = FastAPI()
 
 # Get configuration from environment variables
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")  # Full Supabase connection string
+SUPABASE_DB_URL = os.getenv("SUPABASE_DB_URL")
+
+# CRITICAL: Validate environment variables on startup
+if not OPENAI_API_KEY:
+    print("ERROR: OPENAI_API_KEY environment variable is not set!")
+    raise ValueError("OPENAI_API_KEY must be set")
+
+if not SUPABASE_DB_URL:
+    print("ERROR: SUPABASE_DB_URL environment variable is not set!")
+    raise ValueError("SUPABASE_DB_URL must be set")
+
+print(f"✓ Environment variables loaded")
+print(f"✓ OpenAI API Key: {OPENAI_API_KEY[:20]}...")
+print(f"✓ Supabase URL starts with: {SUPABASE_DB_URL[:30]}...")
 
 # OpenAI client for embedding queries
 client = OpenAI(api_key=OPENAI_API_KEY)
@@ -18,7 +31,12 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 # Database connection
 def get_db():
     """Connect to Supabase PostgreSQL"""
-    return psycopg2.connect(SUPABASE_DB_URL, cursor_factory=RealDictCursor)
+    try:
+        conn = psycopg2.connect(SUPABASE_DB_URL, cursor_factory=RealDictCursor)
+        return conn
+    except Exception as e:
+        print(f"Database connection failed: {e}")
+        raise
 
 def get_query_embedding(query_text):
     """Generate embedding for user query"""
@@ -62,7 +80,7 @@ def check_db_connection():
         conn.close()
         return True
     except Exception as e:
-        print(f"Database connection failed: {e}")
+        print(f"Database connection check failed: {e}")
         return False
 
 @app.post("/retrieve_memories")
@@ -70,18 +88,6 @@ async def retrieve_memories(request: dict):
     """
     Retrieve memories with flexible limits per type.
     Returns formatted context for injection into prompts.
-    
-    Request format:
-    {
-        "query": "user message text",
-        "memory_types": ["spine", "echoes", "carves", "anchors"],
-        "limit_per_type": {
-            "spine": 1,
-            "echoes": 2, 
-            "carves": 2,
-            "anchors": 5
-        }
-    }
     """
     query = request.get("query", "")
     memory_types = request.get("memory_types", ["spine", "echoes", "carves"])
@@ -280,6 +286,7 @@ async def retrieve_memories(request: dict):
         }
         
     except Exception as e:
+        print(f"Error during memory retrieval: {e}")
         raise HTTPException(status_code=500, detail=f"Memory retrieval failed: {str(e)}")
     finally:
         cur.close()
