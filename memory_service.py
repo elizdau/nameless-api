@@ -155,7 +155,7 @@ async def retrieve_memories(request: dict):
             
             if embedding:
                 cur.execute("""
-                    SELECT content, speaker, tonal_flavor
+                    SELECT summary_snippet, speaker_attribution, tonal_flavor
                     FROM echoes
                     WHERE embedding IS NOT NULL
                     ORDER BY embedding <=> %s::vector
@@ -163,7 +163,7 @@ async def retrieve_memories(request: dict):
                 """, (embedding, echoes_limit))
             else:
                 cur.execute("""
-                    SELECT content, speaker, tonal_flavor
+                    SELECT summary_snippet, speaker_attribution, tonal_flavor
                     FROM echoes
                     ORDER BY last_surfaced ASC NULLS FIRST
                     LIMIT %s;
@@ -174,8 +174,8 @@ async def retrieve_memories(request: dict):
             if echo_rows:
                 results.append("### ECHOES (Memorable Fragments)\n")
                 for row in echo_rows:
-                    speaker = row.get('speaker', 'Unknown')
-                    content = row['content']
+                    speaker = row.get('speaker_attribution', 'Unknown')
+                    content = row['summary_snippet']
                     results.append(f"> {speaker}: \"{content}\"")
                     if row.get('tonal_flavor'):
                         results.append(f"_({row['tonal_flavor']})_")
