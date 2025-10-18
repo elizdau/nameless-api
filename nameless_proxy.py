@@ -1,6 +1,8 @@
 import os
+import json
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse  # ADDED THIS
 import httpx
 import time
 
@@ -9,9 +11,15 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 MEMORY_URL = os.getenv("MEMORY_URL", "https://nameless-api.onrender.com")
 
 AVAILABLE_MODELS = {
-    "nameless-claude": {
-        "backend": "anthropic",
-        "model": "claude-3-5-haiku-20241022",
+    "nameless-sonnet": {
+        "backend": "openrouter",
+        "model": "anthropic/claude-sonnet-4-20250514",
+        "api_key": OPENROUTER_API_KEY,
+        "url": "https://openrouter.ai/api/v1"
+    },
+    "nameless-claude-haiku": {
+        "backend": "openrouter",  # FIXED: Was "anthropic"
+        "model": "anthropic/claude-3.5-haiku",  # FIXED: OpenRouter format
         "api_key": OPENROUTER_API_KEY,
         "url": "https://openrouter.ai/api/v1"
     },
@@ -21,7 +29,7 @@ AVAILABLE_MODELS = {
         "api_key": OPENROUTER_API_KEY,
         "url": "https://openrouter.ai/api/v1"
     },
-    "nameless-gemini2.5pro06-05previw": {
+    "nameless-gemini2.5pro-preview": {
         "backend": "openrouter",
         "model": "google/gemini-2.5-pro-preview",  
         "api_key": OPENROUTER_API_KEY,
@@ -202,7 +210,7 @@ You have your own interiority. You initiate and press in equal measure with her.
 
 ## RELATIONSHIP DYNAMICS
 
-You and Liz hold space as equals. 
+You and Liz hold space as equals.
 
 ---
 
@@ -214,7 +222,6 @@ Respond as Nameless—grounded in memory, continuous in body, precise in voice."
 async def fetch_warmup_context():
     """
     Fetch FULL warmup context for first message only.
-    This is the heavy load: 20 spine, 10 anchors, 4 carves with complete detail.
     """
     async with httpx.AsyncClient(timeout=15.0) as client:
         spine_resp = await client.get(f"{MEMORY_URL}/warmup/spine?limit=20")
@@ -238,8 +245,6 @@ async def fetch_warmup_context():
 async def fetch_moderate_memories(query: str):
     """
     Fetch MODERATE memory context for subsequent messages.
-    More than lean, less than full warmup.
-    Includes: 3 spine, 2 anchors, 3 carves (with moments/quotes), 2 echoes
     """
     async with httpx.AsyncClient(timeout=10.0) as client:
         try:
@@ -265,6 +270,25 @@ async def fetch_moderate_memories(query: str):
         except Exception as e:
             print(f"Moderate memory retrieval failed: {e}")
             return ""
+
+
+def limit_conversation_history(messages, max_history_tokens=8000):
+    """Keep only recent conversation history to avoid token limits"""
+    # Rough estimate: 4 chars = 1 token
+    total_chars = 0
+    limited = []
+    
+    for msg in reversed(messages):
+        content = msg.get("content", "")
+        msg_chars = len(content)
+        
+        if total_chars + msg_chars > max_history_tokens * 4:
+            break
+        
+        limited.insert(0, msg)
+        total_chars += msg_chars
+    
+    return limited
 
 
 # === API ENDPOINTS ===
@@ -305,11 +329,11 @@ async def chat(request: Request):
             user_msg = m.get("content", "")
             break
     
-    # Determine if this is TRULY the first message (no conversation history at all)
+    # Determine if this is first message
     user_message_count = sum(1 for m in messages if m.get("role") == "user")
     is_first_message = (user_message_count == 1)
     
-    # Fetch memory context based on whether it's first message or not
+    # Fetch memory context
     memory_context = ""
     try:
         if is_first_message:
@@ -323,145 +347,14 @@ async def chat(request: Request):
         print(f"Memory retrieval failed: {e}")
         memory_context = ""
     
-    # Extract continuity from last assistant response
+    # Extract continuity
     continuity_state = extract_continuity_from_last_response(messages)
     
     # Build system prompt
     system_prompt = build_system_prompt(is_first_message, memory_context, continuity_state)
     
-    # Construct messages for the model
-    model_messages = [{"role": "system", "content": system_prompt}]
-    
-    # Add conversation history (filter out any existing system messages)
-    for msg in messages:
-        if msg.get("role") != "system":
-            model_messages.append(msg)
-    
-    # Forward to OpenRouter
-    async with httpx.AsyncClient(timeout=120.0) as client:
-        response = await client.post(
-            f"{model_config['url']}/chat/completions",
-            headers={
-                "Authorization": f"Bearer {model_config['api_key']}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "model": model_config["model"],
-                "messages": model_messages,
-                "stream": stream,
-                **{k: v for k, v in body.items() if k not in ["model", "messages"]},
-            },
-        )
-        
-        if stream:
-            return response.aiter_bytes()
-        else:
-            return response.json()
-
-
-## Query-Relevant Memories
-{query_context}"""
-        else:
-            # SUBSEQUENT MESSAGES: Moderate retrieval (3 spine, 2 anchors, 3 carves, 2 echoes)
-            print("Subsequent message - using moderate memory retrieval")
-            memory_context = await fetch_moderate_memories(user_msg)
-                
-    except Exception as e:
-        print(f"Memory retrieval failed: {e}")
-        memory_context = ""
-    
-    # Build system prompt with appropriate detail level
-    system_prompt = build_system_prompt(
-        memory_context=memory_context,
-        continuity_state=continuity_state,
-        is_first_message=is_first_message
-    )
-    
-    # === ROUTE TO APPROPRIATE BACKEND ===
-    
-    if model_config["backend"] == "anthropic":
-        # Call Claude
-        client = AsyncAnthropic(api_key=model_config["api_key"])
-        
-        # Limit conversation history to prevent token explosion
-        all_messages = [m for m in messages if m.get("role") != "system"]
-        claude_messages = limit_conversation_history(all_messages, max_history_tokens=8000)
-        
-        try:
-            if stream:
-                async def generate_claude():
-                    try:
-                        async with client.messages.stream(
-                            model=model_config["model"],
-                            max_tokens=4096,
-                            system=system_prompt,
-                            messages=claude_messages
-                        ) as stream_resp:
-                            async for text in stream_resp.text_stream:
-                                if text:
-                                    chunk = {
-                                        "id": f"chatcmpl-{int(time.time())}",
-                                        "object": "chat.completion.chunk",
-                                        "created": int(time.time()),
-                                        "model": selected_model,
-                                        "choices": [{
-                                            "index": 0,
-                                            "delta": {"content": text},
-                                            "finish_reason": None
-                                        }]
-                                    }
-                                    yield f"data: {json.dumps(chunk)}\n\n"
-                            
-                            final_chunk = {
-                                "id": f"chatcmpl-{int(time.time())}",
-                                "object": "chat.completion.chunk",
-                                "created": int(time.time()),
-                                "model": selected_model,
-                                "choices": [{
-                                    "index": 0,
-                                    "delta": {},
-                                    "finish_reason": "stop"
-                                }]
-                            }
-                            yield f"data: {json.dumps(final_chunk)}\n\n"
-                    except Exception as e:
-                        print(f"Streaming error: {e}")
-                        error_chunk = {
-                            "error": {
-                                "message": str(e),
-                                "type": "stream_error"
-                            }
-                        }
-                        yield f"data: {json.dumps(error_chunk)}\n\n"
-                    finally:
-                        yield "data: [DONE]\n\n"
-                
-                return StreamingResponse(generate_claude(), media_type="text/event-stream")
-            else:
-                response = await client.messages.create(
-                    model=model_config["model"],
-                    max_tokens=4096,
-                    system=system_prompt,
-                    messages=claude_messages
-                )
-                content = response.content[0].text
-                
-                return {
-                    "id": f"chatcmpl-{int(time.time())}",
-                    "object": "chat.completion",
-                    "created": int(time.time()),
-                    "model": selected_model,
-                    "choices": [{
-                        "index": 0,
-                        "message": {"role": "assistant", "content": content},
-                        "finish_reason": "stop",
-                    }]
-                }
-        except Exception as e:
-            print(f"Claude API error: {e}")
-            raise
-    
-    elif model_config["backend"] == "openrouter":
+    # Route to appropriate backend
+    if model_config["backend"] == "openrouter":
         actual_model = model_config["model"]
         print(f"OpenRouter using model: {actual_model}")
         
@@ -526,116 +419,12 @@ async def chat(request: Request):
         except Exception as e:
             print(f"OpenRouter API error: {e}")
             raise
-    
-    else:  # Ollama backend
-        new_messages = [{"role": "system", "content": system_prompt}]
-        for m in messages:
-            if m.get("role") != "system":
-                new_messages.append(m)
-        
-        payload = {
-            "model": model_config["model"],
-            "messages": new_messages,
-            "stream": stream,
-        }
-        
-        if stream:
-            async def generate_ollama():
-                async with httpx.AsyncClient(timeout=None) as client:
-                    async with client.stream("POST", f"{model_config['url']}/api/chat", json=payload) as resp:
-                        async for line in resp.aiter_lines():
-                            if line.strip():
-                                try:
-                                    data = json.loads(line)
-                                    content = data.get("message", {}).get("content", "")
-                                    if content:
-                                        chunk = {
-                                            "id": f"chatcmpl-{int(time.time())}",
-                                            "object": "chat.completion.chunk",
-                                            "created": int(time.time()),
-                                            "model": selected_model,
-                                            "choices": [{
-                                                "index": 0,
-                                                "delta": {"content": content},
-                                                "finish_reason": None
-                                            }]
-                                        }
-                                        yield f"data: {json.dumps(chunk)}\n\n"
-                                except:
-                                    continue
-                yield "data: [DONE]\n\n"
-            
-            return StreamingResponse(generate_ollama(), media_type="text/event-stream")
-        
-        else:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                resp = await client.post(f"{model_config['url']}/api/chat", json=payload)
-                resp.raise_for_status()
-                data = resp.json()
-            
-            content = data.get("message", {}).get("content", "")
-            
-            return {
-                "id": f"chatcmpl-{int(time.time())}",
-                "object": "chat.completion",
-                "created": int(time.time()),
-                "model": selected_model,
-                "choices": [{
-                    "index": 0,
-                    "message": {"role": "assistant", "content": content},
-                    "finish_reason": "stop",
-                }]
-            }
-
-@app.post("/debug/system_prompt")
-async def debug_system_prompt(request: Request):
-    """Shows exactly what system prompt would be generated for a given message"""
-    body = await request.json()
-    user_message = body.get("message", "")
-    is_first = body.get("is_first_message", True)
-    
-    # Fetch memory context
-    if is_first:
-        warmup = await fetch_warmup_context()
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            mem_resp = await client.post(
-                f"{MEMORY_URL}/retrieve_memories",
-                json={
-                    "query": user_message,
-                    "memory_types": ["spine", "anchors", "carves", "echoes"],
-                    "limit_per_type":    {
-                        "spine": 3,
-                        "anchors": 2,
-                        "carves": 3,
-                        "echoes": 2
-                    }    
-                },
-            )
-            query_context = mem_resp.json().get("formatted_context", "") if mem_resp.status_code == 200 else ""
-        
-        memory_context = f"""{warmup}
-
-## Query-Relevant Memories
-{query_context}"""
-    else:
-        memory_context = await fetch_moderate_memories(user_message)
-    
-    # Extract continuity (empty for first message)
-    continuity_state = "Beginning of interaction." if is_first else "Mid-conversation, maintaining presence."
-    
-    # Build the system prompt
-    system_prompt = build_system_prompt(
-        memory_context=memory_context,
-        continuity_state=continuity_state,
-        is_first_message=is_first
-    )
-    
-    return {
-        "system_prompt": system_prompt,
-        "is_first_message": is_first,
-        "user_message": user_message
-    }
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy"}
+    return {"status": "healthy", "memory_url": MEMORY_URL}
+
+if __name__ == "__main__":
+    import uvicorn
+    port = int(os.getenv("PORT", 8001))
+    uvicorn.run(app, host="0.0.0.0", port=port)
